@@ -1,0 +1,31 @@
+pipeline {
+    agent any
+    environment {
+        registry = "example.com/my-image"
+        cluster = "my-eks-cluster"
+        namespace = "default"
+    }
+    stages {
+        stage('Build') {
+            steps {
+                sh 'docker build -t $registry:$BUILD_NUMBER .'
+            }
+        }
+        stage('Push to Registry') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'my-registry-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                    sh "docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD example.com"
+                }
+                sh "docker push $registry:$BUILD_NUMBER"
+            }
+        }
+        stage('Deploy to EKS') {
+            steps {
+                withCredentials([awsCredentials(credentialsId: 'my-aws-creds', regionVariable: 'AWS_REGION')]) {
+                    sh "aws eks update-kubeconfig --name $cluster --region $AWS_REGION"
+                    sh "kubectl set image deployment/my-deployment my-container=$registry:$BUILD_NUMBER -n $namespace"
+                }
+            }
+        }
+    }
+}
