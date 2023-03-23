@@ -119,12 +119,27 @@ pipeline {
             }
             steps {
                 script {
-                    def tag = "${BRANCH_NAME}-${BUILD_NUMBER}"
-                    if (BRANCH_NAME == "main" || BRANCH_NAME == "uat" || BRANCH_NAME == "prod") {
-                        sh 'docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${tag} -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest .'
-                    } else {
-                        sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${tag} ."
-                    }
+                    def branchTag = "${BRANCH_NAME}-${BUILD_NUMBER}"
+                    def latestTag = "${BRANCH_NAME}-latest"
+
+                    sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${branchTag} ."
+                }
+            }
+        }
+        stage('Tag Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def branchTag = "${BRANCH_NAME}-${BUILD_NUMBER}"
+                    def latestTag = "${BRANCH_NAME}-latest"
+
+                    sh "docker tag ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${branchTag} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${latestTag}"
                 }
             }
         }
@@ -139,15 +154,8 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'my-registry-credentials', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
                     sh "docker login ${DOCKER_REGISTRY} -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD}"
-                    script {
-                        def tag = "${BRANCH_NAME}-${BUILD_NUMBER}"
-                        if (BRANCH_NAME == "main" || BRANCH_NAME == "uat" || BRANCH_NAME == "prod") {
-                            sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${tag}"
-                            sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest"
-                        } else {
-                            sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${tag}"
-                        }
-                    }
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest"
                 }
             }
         }
