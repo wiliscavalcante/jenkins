@@ -46,3 +46,57 @@ pipeline {
         }
     }
 }
+======================
+pipeline {
+    agent any
+    environment {
+        DOCKER_REGISTRY = "my-registry.com"
+        DOCKER_IMAGE = "my-image"
+    }
+    options {
+        allowUndeclaredVariables()
+    }
+    stages {
+        stage('Build Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                echo "Starting Build Image stage"
+                sh 'docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER} .'
+                currentBuild.result = 'SUCCESS'
+            }
+            post {
+                always {
+                    echo "Build Image stage finished with result: ${currentBuild.result}"
+                }
+            }
+        }
+        stage('Push Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                echo "Starting Push Image stage"
+                withCredentials([usernamePassword(credentialsId: 'my-registry-credentials', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                    sh "docker login ${DOCKER_REGISTRY} -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD}"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                    currentBuild.result = 'SUCCESS'
+                }
+            }
+            post {
+                always {
+                    echo "Push Image stage finished with result: ${currentBuild.result}"
+                }
+            }
+        }
+    }
+}
