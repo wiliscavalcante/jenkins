@@ -1,55 +1,48 @@
 pipeline {
-  agent any
-  environment {
-    DOCKER_REGISTRY = "registry.example.com"
-    DOCKER_USERNAME = credentials('docker-username')
-    DOCKER_PASSWORD = credentials('docker-password')
-    DOCKER_IMAGE_NAME = "my-app"
-  }
-  stages {
-    stage("Build Image") {
-      steps {
-        script {
-          def branchName = env.BRANCH_NAME.toLowerCase()
-          def imageNameWithTag = "${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:${branchName}-${env.BUILD_NUMBER}"
-          
-          sh "docker build -t ${imageNameWithTag} ."
-          env.IMAGE_NAME_WITH_TAG = imageNameWithTag
-        }
-      }
-      post {
-        success {
-          echo "Image built successfully!"
-        }
-        failure {
-          echo "Failed to build image."
-        }
-      }
+    agent any
+    environment {
+        DOCKER_REGISTRY = "my-registry.com"
+        DOCKER_IMAGE = "my-image"
     }
-    stage("Push Image") {
-      when {
-        branch 'main'
-      }
-      steps {
-        script {
-          sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD} ${DOCKER_REGISTRY}"
-          sh "docker push ${env.IMAGE_NAME_WITH_TAG}"
+    stages {
+        stage('Build Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                echo "Iniciando build da imagem..."
+                sh 'docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER} .'
+                if (currentBuild.result == 'SUCCESS') {
+                    echo "Build da imagem concluído com sucesso!"
+                } else {
+                    echo "Falha ao realizar build da imagem"
+                }
+            }
         }
-      }
-      post {
-        success {
-          echo "Image pushed successfully!"
+        stage('Push Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                echo "Iniciando push da imagem..."
+                withCredentials([usernamePassword(credentialsId: 'my-registry-credentials', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                    sh "docker login ${DOCKER_REGISTRY} -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD}"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                    if (currentBuild.result == 'SUCCESS') {
+                        echo "Push da imagem concluído com sucesso!"
+                    } else {
+                        echo "Falha ao realizar push da imagem"
+                    }
+                }
+            }
         }
-        failure {
-          echo "Failed to push image."
-        }
-      }
     }
-  }
-  post {
-    always {
-      deleteDir()
-    }
-  }
 }
-
