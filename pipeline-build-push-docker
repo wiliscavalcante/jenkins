@@ -100,3 +100,53 @@ pipeline {
         }
     }
 }
+
+======pipeline {
+    agent any
+    environment {
+        DOCKER_REGISTRY = "my-registry.com"
+        DOCKER_IMAGE = "my-image"
+    }
+    stages {
+        stage('Build Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def tag = "${BRANCH_NAME}-${BUILD_NUMBER}"
+                    if (BRANCH_NAME == 'main' || BRANCH_NAME == 'uat' || BRANCH_NAME == 'prod') {
+                        tag = "latest"
+                    }
+                    sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${tag} ."
+                }
+            }
+        }
+        stage('Push Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def tag = "${BRANCH_NAME}-${BUILD_NUMBER}"
+                    if (BRANCH_NAME == 'main' || BRANCH_NAME == 'uat' || BRANCH_NAME == 'prod') {
+                        tag = "latest"
+                    }
+                    withCredentials([usernamePassword(credentialsId: 'my-registry-credentials', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                        sh "docker login ${DOCKER_REGISTRY} -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD}"
+                        sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${tag}"
+                    }
+                }
+            }
+        }
+    }
+}
+
