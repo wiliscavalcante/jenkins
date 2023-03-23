@@ -114,17 +114,18 @@ pipeline {
                 anyOf {
                     branch 'main'
                     branch 'uat'
-                    branch 'dev'
+                    branch 'prod'
                 }
             }
             steps {
-                sh """
-                    if [ \${BRANCH_NAME} = "main" ] || [ \${BRANCH_NAME} = "uat" ] || [ \${BRANCH_NAME} = "prod" ]; then
-                        docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER} .
-                    else
-                        docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER} .
-                    fi
-                """
+                script {
+                    def image_tag = "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                    if (BRANCH_NAME in ['main', 'uat', 'prod']) {
+                        sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest -t ${image_tag} ."
+                    } else {
+                        sh "docker build -t ${image_tag} ."
+                    }
+                }
             }
         }
         stage('Push Image') {
@@ -132,14 +133,21 @@ pipeline {
                 anyOf {
                     branch 'main'
                     branch 'uat'
-                    branch 'dev'
+                    branch 'prod'
                 }
             }
             steps {
                 withCredentials([usernamePassword(credentialsId: 'my-registry-credentials', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
                     sh "docker login ${DOCKER_REGISTRY} -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD}"
-                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest"
-                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                    script {
+                        def image_tag = "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                        if (BRANCH_NAME in ['main', 'uat', 'prod']) {
+                            sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest"
+                            sh "docker push ${image_tag}"
+                        } else {
+                            sh "docker push ${image_tag}"
+                        }
+                    }
                 }
             }
         }
