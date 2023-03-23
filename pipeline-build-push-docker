@@ -1,30 +1,37 @@
 pipeline {
-    agent any
-    environment {
-        DOCKER_REGISTRY = "seu-registry-privado.com/"
-        DOCKER_IMAGE_NAME = "nome-da-imagem-docker"
-        TAG_NAME = "${env.BUILD_NUMBER}"
-    }
-    stages {
-        stage('Build Docker Image') {
-            steps {
-                sh "docker build -t ${env.DOCKER_REGISTRY}${env.DOCKER_IMAGE_NAME}:${env.TAG_NAME} ."
-            }
+  agent any
+  environment {
+    DOCKER_REGISTRY = "registry.example.com"
+    DOCKER_USERNAME = credentials('docker-username')
+    DOCKER_PASSWORD = credentials('docker-password')
+    DOCKER_IMAGE_NAME = "my-app"
+  }
+  stages {
+    stage("Build and Push Image") {
+      steps {
+        script {
+          def branchName = env.BRANCH_NAME.toLowerCase()
+          def imageNameWithTag = "${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:${branchName}-${env.BUILD_NUMBER}"
+          
+          sh "docker build -t ${imageNameWithTag} ."
+          sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD} ${DOCKER_REGISTRY}"
+          sh "docker push ${imageNameWithTag}"
         }
-        stage('Push Docker Image') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'uat'
-                    branch 'dev'
-                }
-            }
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'docker-credentials-id', passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
-                    sh "echo $DOCKER_PASSWORD | docker login --username $DOCKER_USERNAME --password-stdin ${env.DOCKER_REGISTRY}"
-                    sh "docker push ${env.DOCKER_REGISTRY}${env.DOCKER_IMAGE_NAME}:${env.TAG_NAME}"
-                }
-            }
+      }
+      post {
+        success {
+          echo "Image built and pushed successfully!"
         }
+        failure {
+          echo "Failed to build and push image."
+        }
+      }
     }
+  }
+  post {
+    always {
+      deleteDir()
+    }
+  }
 }
+
