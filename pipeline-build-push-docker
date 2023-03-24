@@ -233,9 +233,20 @@ pipeline {
                     }
 
                     sh "kubectl apply -f kubernetes/"
+                    timeout(time: env.TIMEOUT, unit: 'SECONDS') {
+                        def success = false
+                        while (!success) {
+                            def pods = sh(script: "kubectl get pods -n ${NAMESPACE} -o jsonpath='{.items[*].status.containerStatuses[?(@.ready==true)].ready}'",
+                                            returnStdout: true).trim()
+                            if (pods == 'true true') {
+                                success = true
+                            } else {
+                                sleep 10
+                            }
+                        }
+                    }
                 }
             }
-            description("Implantação nos ambientes de prod, uat ou dev")
         }
     }
 }
