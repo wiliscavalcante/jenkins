@@ -161,3 +161,81 @@ pipeline {
         }
     }
 }
+================
+pipeline {
+    agent any
+    environment {
+        DOCKER_REGISTRY = "my-registry.com"
+        DOCKER_IMAGE = "my-image"
+    }
+    stages {
+        stage('Build Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def branchTag = "${BRANCH_NAME}-${BUILD_NUMBER}"
+                    def latestTag = "${BRANCH_NAME}-latest"
+
+                    sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${branchTag} -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${latestTag} ."
+                }
+            }
+            description("Compilação da imagem Docker")
+        }
+        stage('Push Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'my-registry-credentials', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                    sh "docker login ${DOCKER_REGISTRY} -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD}"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest"
+                }
+            }
+            description("Envio da imagem Docker para o registro")
+        }
+        stage('Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def env = ''
+                    def clusterName = ''
+
+                    if (BRANCH_NAME == 'main') {
+                        env = 'prod'
+                        clusterName = 'my-prod-cluster'
+                    } else if (BRANCH_NAME == 'uat') {
+                        env = 'uat'
+                        clusterName = 'my-uat-cluster'
+                    } else if (BRANCH_NAME == 'dev') {
+                        env = 'dev'
+                        clusterName = 'my-dev-cluster'
+                    }
+
+                    withAWS(region: 'sa-east-1', profile: "ambiente${env}") {
+                        sh "aws eks update-kubeconfig --name ${clusterName}"
+                    }
+
+                    sh "kubectl apply -f kubernetes/"
+                }
+            }
+            description("Implantação nos ambientes de prod, uat ou dev")
+        }
+    }
+}
