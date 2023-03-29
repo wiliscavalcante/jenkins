@@ -1,31 +1,99 @@
 pipeline {
     agent any
     environment {
-        registry = "example.com/my-image"
-        cluster = "my-eks-cluster"
-        namespace = "default"
+        DOCKER_REGISTRY = "my-registry.com"
+        DOCKER_IMAGE = "my-image"
     }
     stages {
-        stage('Build') {
-            steps {
-                sh 'docker build -t $registry:$BUILD_NUMBER .'
-            }
-        }
-        stage('Push to Registry') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'my-registry-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
-                    sh "docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD example.com"
-                }
-                sh "docker push $registry:$BUILD_NUMBER"
-            }
-        }
-        stage('Deploy to EKS') {
-            steps {
-                withCredentials([awsCredentials(credentialsId: 'my-aws-creds', regionVariable: 'AWS_REGION')]) {
-                    sh "aws eks update-kubeconfig --name $cluster --region $AWS_REGION"
-                    sh "kubectl set image deployment/my-deployment my-container=$registry:$BUILD_NUMBER -n $namespace"
+        stage('Build Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
                 }
             }
+            steps {
+                script {
+                    def branchTag = "${BRANCH_NAME}-${BUILD_NUMBER}"
+                    def latestTag = "${BRANCH_NAME}-latest"
+
+                    sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${branchTag} -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${latestTag} ."
+                }
+            }
+            description("Compilação da imagem Docker")
+        }
+        stage('Push Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'my-registry-credentials', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                    sh "docker login ${DOCKER_REGISTRY} -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD}"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest"
+                }
+            }
+            description("Envio da imagem Docker para o registro")
+        }
+        stage('Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def env = ''
+                    def clusterName = ''
+                    def namespace = ''
+
+                    if (BRANCH_NAME == 'main') {
+                        env = 'prod'
+                        clusterName = 'my-prod-cluster'
+                        namespace = 'prod-namespace'
+                    } else if (BRANCH_NAME == 'uat') {
+                        env = 'uat'
+                        clusterName = 'my-uat-cluster'
+                        namespace = 'uat-namespace'
+                    } else if (BRANCH_NAME == 'dev') {
+                        env = 'dev'
+                        clusterName = 'my-dev-cluster'
+                        namespace = 'dev-namespace'
+                    }
+
+                    withAWS(region: 'sa-east-1', profile: "ambiente${env}") {
+                        sh "aws eks update-kubeconfig --name ${clusterName}"
+                    }
+
+                    sh "kubectl apply -f k8s/api/"
+                    sh "kubectl apply -f k8s/worker/"
+                    sh "kubectl apply -f k8s/redis/"
+
+                    sh "kubectl set image deployment/my-api-deployment my-api-container=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER} -n ${namespace}"
+                    sh "kubectl set image deployment/my-worker-deployment my-worker-container=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER} -n ${namespace}"
+
+                    timeout(time: env.TIMEOUT, unit: 'SECONDS') {
+                        def success = false
+                        while (!success) {
+                            def pods = sh(script: "kubectl get pods -n ${namespace} -o jsonpath='{.items[*].status.containerStatuses[?(@.ready==true)].ready}'",
+                                            returnStdout: true).trim()
+                            if (pods == 'true true') {
+                                success = true
+                            } else {
+                                sleep 10
+                            }
+                        }
+                    }
+                }
+            }
+            description("Deploy da aplicação no Kubernetes")
         }
     }
 }
