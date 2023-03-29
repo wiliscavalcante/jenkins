@@ -1,45 +1,34 @@
 pipeline {
     agent any
-    environment {
-        DOCKER_REGISTRY = "my-registry.com"
-        DOCKER_IMAGE = "my-image"
-    }
-    stages {
-        stage('Build Image') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'uat'
-                    branch 'dev'
-                }
-            }
-            steps {
-                script {
-                    def branchTag = "${BRANCH_NAME}-${BUILD_NUMBER}"
-                    def latestTag = "${BRANCH_NAME}-latest"
 
-                    sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${branchTag} -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${latestTag} ."
-                }
-            }
-            description("Compilação da imagem Docker")
-        }
-        stage('Push Image') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'uat'
-                    branch 'dev'
-                }
-            }
+    environment {
+        CLUSTER_NAME = "meu-cluster"
+        NAMESPACE = "default"
+        TIMEOUT = 300
+    }
+
+    stages {
+        stage('Checkout') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'my-registry-credentials', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
-                    sh "docker login ${DOCKER_REGISTRY} -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD}"
-                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
-                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest"
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'docker build -t my-image:${env.BRANCH_NAME}-${env.BUILD_NUMBER} .'
+            }
+        }
+
+        stage('Push to registry') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'my-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                    sh 'docker login -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD} my-registry.com'
+                    sh 'docker push my-registry.com/my-image:${env.BRANCH_NAME}-${env.BUILD_NUMBER}'
                 }
             }
-            description("Envio da imagem Docker para o registro")
         }
+
         stage('Deploy') {
             when {
                 anyOf {
@@ -48,41 +37,37 @@ pipeline {
                     branch 'dev'
                 }
             }
+
             steps {
                 script {
-                    def env = ''
-                    def clusterName = ''
-                    def namespace = ''
+                    def ambiente
+                    def cluster
 
-                    if (BRANCH_NAME == 'main') {
-                        env = 'prod'
-                        clusterName = 'my-prod-cluster'
-                        namespace = 'prod-namespace'
-                    } else if (BRANCH_NAME == 'uat') {
-                        env = 'uat'
-                        clusterName = 'my-uat-cluster'
-                        namespace = 'uat-namespace'
-                    } else if (BRANCH_NAME == 'dev') {
-                        env = 'dev'
-                        clusterName = 'my-dev-cluster'
-                        namespace = 'dev-namespace'
+                    switch(env.BRANCH_NAME) {
+                        case 'main':
+                            ambiente = 'prod'
+                            cluster = 'meu-cluster-prod'
+                            break
+                        case 'uat':
+                            ambiente = 'uat'
+                            cluster = 'meu-cluster-uat'
+                            break
+                        case 'dev':
+                            ambiente = 'dev'
+                            cluster = 'meu-cluster-dev'
+                            break
                     }
 
-                    withAWS(region: 'sa-east-1', profile: "ambiente${env}") {
-                        sh "aws eks update-kubeconfig --name ${clusterName}"
-                    }
+                    sh "AWS_REGION=sa-east-1 AWS_PROFILE=ambiente-${ambiente} aws eks update-kubeconfig --name ${cluster}"
+                    sh "kubectl apply -f k8s/api -f k8s/worker -f k8s/redis"
 
-                    sh "kubectl apply -f k8s/api/"
-                    sh "kubectl apply -f k8s/worker/"
-                    sh "kubectl apply -f k8s/redis/"
-
-                    sh "kubectl set image deployment/my-api-deployment my-api-container=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER} -n ${namespace}"
-                    sh "kubectl set image deployment/my-worker-deployment my-worker-container=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER} -n ${namespace}"
+                    sh "kubectl set image deployment/api-deployment api=my-registry.com/my-image:${env.BRANCH_NAME}-${env.BUILD_NUMBER} -n ${NAMESPACE}"
+                    sh "kubectl set image deployment/worker-deployment worker=my-registry.com/my-image:${env.BRANCH_NAME}-${env.BUILD_NUMBER} -n ${NAMESPACE}"
 
                     timeout(time: env.TIMEOUT, unit: 'SECONDS') {
                         def success = false
                         while (!success) {
-                            def pods = sh(script: "kubectl get pods -n ${namespace} -o jsonpath='{.items[*].status.containerStatuses[?(@.ready==true)].ready}'",
+                            def pods = sh(script: "kubectl get pods -n ${NAMESPACE} -o jsonpath='{.items[*].status.containerStatuses[?(@.ready==true)].ready}'",
                                             returnStdout: true).trim()
                             if (pods == 'true true') {
                                 success = true
@@ -93,7 +78,6 @@ pipeline {
                     }
                 }
             }
-            description("Deploy da aplicação no Kubernetes")
         }
     }
 }
