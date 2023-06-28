@@ -180,3 +180,71 @@ RUN for i in {1..3}; do yarn install && break || sleep 1; done
 COPY . .
 
 CMD ["node", "index.js"]
+-----
+
+# Estágio de construção
+FROM node:16-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json yarn.lock ./
+RUN yarn config set network-timeout 300000
+RUN yarn --frozen-lockfile
+
+COPY . .
+
+RUN yarn build
+
+# Estágio de produção
+FROM node:16-alpine
+
+WORKDIR /app
+
+COPY --from=builder /app/dist ./dist
+COPY package.json yarn.lock ./
+
+RUN yarn --production --frozen-lockfile
+
+CMD ["node", "dist/index.js"]
+---
+# Estágio de construção
+FROM node:16-alpine AS builder
+
+# Crie um usuário não-root chamado "appuser"
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+WORKDIR /app
+
+# Defina o diretório de trabalho e as permissões adequadas
+RUN chown -R appuser:appgroup /app
+
+USER appuser
+
+COPY package.json yarn.lock ./
+RUN yarn config set network-timeout 300000
+RUN yarn --frozen-lockfile
+
+COPY . .
+
+RUN yarn build
+
+# Estágio de produção
+FROM node:16-alpine
+
+# Crie um usuário não-root chamado "appuser"
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+WORKDIR /app
+
+# Defina o diretório de trabalho e as permissões adequadas
+RUN chown -R appuser:appgroup /app
+
+USER appuser
+
+COPY --from=builder /app/dist ./dist
+COPY package.json yarn.lock ./
+
+RUN yarn --production --frozen-lockfile
+
+CMD ["node", "dist/index.js"]
+
