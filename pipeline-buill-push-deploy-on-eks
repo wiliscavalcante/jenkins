@@ -1,3 +1,34 @@
+stage('Deploy') {
+    steps {
+        script {
+            // Adiciona o repositório do chart
+            env.CHART_REPO_NAME = "my-chart-repo"
+            sh "helm repo add ${env.CHART_REPO_NAME} ${CHART_REPO_URL}"
+            sh "helm repo update"
+            
+            // Define o timeout para a etapa de deploy
+            timeout(time: 20, unit: 'MINUTES') {
+                // Instala ou atualiza o release do Helm com o arquivo values.yaml
+                sh "helm upgrade --install ${HELM_RELEASE_NAME} ${CHART_NAME} --version ${CHART_VERSION} --namespace ${NAMESPACE} --values ${VALUES_FILE_PATH}"
+                
+                // Verifica o estado dos pods do release
+                def pods = sh(returnStdout: true, script: "kubectl get pods --namespace ${NAMESPACE} -l release=${HELM_RELEASE_NAME} -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase}\\n{end}'").trim()
+                def podStatuses = pods.split("\n")
+                
+                // Verifica se todos os pods estão em execução
+                boolean allPodsRunning = podStatuses.every { it.contains("Running") }
+                
+                // Verifica se todos os pods estão em execução e falha o pipeline se não estiverem
+                if (!allPodsRunning) {
+                    error("Falha: Nem todos os pods do release estão em execução após o deploy")
+                }
+            }
+        }
+    }
+}
+
+
+---
 pipeline {
     agent any
 
