@@ -81,3 +81,90 @@ pipeline {
         }
     }
 }
+#############
+pipeline {
+    agent any
+    environment {
+        DOCKER_REGISTRY = "registry.datalabserasaexperian.com.br"
+        DOCKER_IMAGE = "remote_sensing/agrilearn-api"
+        DOCKER_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
+        NAMESPACE = "agrilearn"
+        DEPLOYMENT_API = "agrilearn-api-deployment"
+        DEPLOYMENT_WORKER = "agrilearn-worker-deployment"
+    }
+    stages {
+        stage('Build Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def branchTag = "${BRANCH_NAME}-${BUILD_NUMBER}"
+                    def latestTag = "${BRANCH_NAME}-latest"
+
+                    sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${branchTag} -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${latestTag} ."
+                }
+            }
+        }
+        stage('Push Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'DOCKER_REPOSITORY', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh "echo $PASSWORD | docker login ${DOCKER_REGISTRY} -u ${USERNAME} --password-stdin"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest"
+                }
+            }
+        }
+        stage('Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def env = ''
+                    def clusterName = ""
+
+                    if (BRANCH_NAME == 'main') {
+                        env = 'prod'
+                        clusterName = "agribusiness-eks-${env}"
+						profile = "eec-agribusiness-${env}"
+                    } else if (BRANCH_NAME == 'uat') {
+                        env = 'uat'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
+                    } else if (BRANCH_NAME == 'dev') {
+                        env = 'dev'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
+                    }
+                  sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"	
+                  sh "kubectl delete pods --field-selector status.phase=Failed -n ${NAMESPACE}"
+                  sh "kubectl apply -f kubernetes/${env}/agrilearn-api -f kubernetes/${env}/agrilearn-redis -f kubernetes/${env}/agrilearn-worker"
+                  sh "kubectl scale --replicas=0 deployment/${DEPLOYMENT_API} -n ${NAMESPACE}"
+                  sh "kubectl scale --replicas=0 deployment/${DEPLOYMENT_WORKER} -n ${NAMESPACE}"
+                  sh "sleep 60"
+                  sh "kubectl set image deployment/${DEPLOYMENT_API} agrilearn-api=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} -n ${NAMESPACE}"
+                  sh "kubectl set image deployment/${DEPLOYMENT_WORKER} agrilearn-worker=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} -n ${NAMESPACE}"
+                  sh "kubectl scale --replicas=1 deployment/${DEPLOYMENT_API} -n ${NAMESPACE}"
+                  sh "kubectl scale --replicas=1 deployment/${DEPLOYMENT_WORKER} -n ${NAMESPACE}"
+                  sh "sleep 120"
+                }
+            }
+        }
+    }
+}
