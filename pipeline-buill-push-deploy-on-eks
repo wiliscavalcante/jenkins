@@ -168,3 +168,15 @@ pipeline {
         }
     }
 }
+FROM node:16-alpine
+
+WORKDIR /app
+
+COPY . .
+
+RUN yarn config set network-timeout 300000
+RUN for i in {1..3}; do yarn install && break || sleep 1; done
+
+COPY . .
+
+CMD ["node", "index.js"]
