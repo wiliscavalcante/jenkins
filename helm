@@ -1,0 +1,83 @@
+pipeline {
+    agent any
+    environment {
+        DOCKER_REGISTRY = "registry.datalabserasaexperian.com.br"
+        DOCKER_IMAGE = "agribusiness/sensoriamento/agrilearn-worker"
+        DOCKER_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
+        NAMESPACE = "sensoriamento"
+        CHART_REPO_NAME = "agribusiness-helm-charts"
+        CHART_REPO_URL = "https://nexus.datalabserasaexperian.com.br/repository/agribusiness-helm-charts"  
+        CHART_VERSION = "2.0.0"
+        CHART_NAME = "${CHART_REPO_NAME}/agribusiness-generic-app"
+        HELM_RELEASE_NAME = "agrilearn-worker"
+    }
+    stages {
+        stage('Build Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def branchTag = "${BRANCH_NAME}-${BUILD_NUMBER}"
+
+                    sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${branchTag} -f Dockerfile.worker ."
+                }
+            }
+        }
+        stage('Push Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'DOCKER_REPOSITORY', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh "echo $PASSWORD | docker login ${DOCKER_REGISTRY} -u ${USERNAME} --password-stdin"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
+                }
+            }
+        }
+        stage('Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def env = ''
+                    def clusterName = ""
+
+                    if (BRANCH_NAME == 'main') {
+                        env = 'prod'
+                        clusterName = "agribusiness-eks-${env}"
+						profile = "eec-agribusiness-${env}"
+                    } else if (BRANCH_NAME == 'uat') {
+                        env = 'uat'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
+                    } else if (BRANCH_NAME == 'dev') {
+                        env = 'dev'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
+                    }
+                  sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"	
+                  sh "helm repo add ${CHART_REPO_NAME} ${CHART_REPO_URL}"
+                  sh "helm repo update"
+                  // Atualiza o valor da tag no arquivo values
+                  sh "sed -i 's|tag: latest|tag: ${DOCKER_TAG}|' eks/${env}/worker/values.yaml"
+                  // Instala ou atualiza o release do Helm com o arquivo values.yaml
+                  sh "helm upgrade --install ${HELM_RELEASE_NAME} ${CHART_NAME} --version ${CHART_VERSION} --namespace ${NAMESPACE} --values eks/${env}/worker/values.yaml"
+                }
+            }
+        }
+    }
+}
