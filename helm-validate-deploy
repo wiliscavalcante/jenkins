@@ -78,36 +78,40 @@ pipeline {
             }
         }
         stage('Validate Deployment') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'uat'
-                    branch 'dev'
+    when {
+        anyOf {
+            branch 'main'
+            branch 'uat'
+            branch 'dev'
+        }
+    }
+    steps {
+        script {
+            def timeout = 120  // tempo de espera em segundos
+            def sleepTime = 10 // intervalo entre verificações em segundos
+            def iterations = timeout / sleepTime
+            def allPodsRunning = false
+            
+            for (int i = 0; i < iterations; i++) {
+                def getPods = sh(script: "kubectl get pods -n ${NAMESPACE} --selector=app=${HELM_RELEASE_NAME} -o jsonpath='{.items[*].status.phase}'", returnStdout: true).trim()
+                
+                def podStatuses = getPods.split(' ')
+                
+                if (podStatuses.every { it == 'Running' }) {
+                    allPodsRunning = true
+                    echo "All pods are running."
+                    break
+                } else {
+                    echo "Waiting for all pods to be running. Current statuses: ${getPods}"
                 }
+                
+                sleep time: sleepTime, unit: 'SECONDS'
             }
-            steps {
-                script {
-                    def timeout = 120  // tempo de espera em segundos
-                    def sleepTime = 10 // intervalo entre verificações em segundos
-                    def iterations = timeout / sleepTime
-                    def allPodsRunning = false
-                    
-                    for (int i = 0; i < iterations; i++) {
-                        def getPods = sh(script: "kubectl get pods -n ${NAMESPACE} -o jsonpath='{.items[*].status.phase}'", returnStdout: true).trim()
-                        
-                        if (getPods.split(' ').every { it == 'Running' }) {
-                            allPodsRunning = true
-                            break
-                        }
-                        
-                        sleep time: sleepTime, unit: 'SECONDS'
-                    }
-                    
-                    if (!allPodsRunning) {
-                        error("Validation failed. Not all pods are in 'Running' state.")
-                    }
-                }
+            
+            if (!allPodsRunning) {
+                error("Validation failed. Not all pods are in 'Running' state.")
             }
         }
     }
 }
+
