@@ -1,0 +1,113 @@
+pipeline {
+    agent any
+    environment {
+        DOCKER_REGISTRY = "registry.com.br"
+        DOCKER_IMAGE = "agribusiness/sensoriamento/agrilearn-worker"
+        DOCKER_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
+        NAMESPACE = "sensoriamento"
+        CHART_REPO_NAME = "agribusiness-helm-charts"
+        CHART_REPO_URL = "https://nexus.com.br/repository/agribusiness-helm-charts"  
+        CHART_VERSION = "2.0.0"
+        CHART_NAME = "${CHART_REPO_NAME}/agribusiness-generic-app"
+        HELM_RELEASE_NAME = "agrilearn-worker"
+    }
+    stages {
+        stage('Build Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} -f Dockerfile.worker ."
+                }
+            }
+        }
+        stage('Push Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'DOCKER_REPOSITORY', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh "echo $PASSWORD | docker login ${DOCKER_REGISTRY} -u ${USERNAME} --password-stdin"
+                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+                }
+            }
+        }
+        stage('Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def env = ''
+                    def clusterName = ''
+                    def profile = ''
+
+                    if (BRANCH_NAME == 'main') {
+                        env = 'prod'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
+                    } else if (BRANCH_NAME == 'uat') {
+                        env = 'uat'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
+                    } else if (BRANCH_NAME == 'dev') {
+                        env = 'dev'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
+                    }
+                    
+                    sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"
+                    sh "helm repo add ${CHART_REPO_NAME} ${CHART_REPO_URL}"
+                    sh "helm repo update"
+                    sh "sed -i 's|tag: latest|tag: ${DOCKER_TAG}|' eks/${env}/worker/values.yaml"
+                    sh "helm upgrade --install ${HELM_RELEASE_NAME} ${CHART_NAME} --version ${CHART_VERSION} --namespace ${NAMESPACE} --values eks/${env}/worker/values.yaml"
+                }
+            }
+        }
+        stage('Validate Deployment') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def timeout = 120  // tempo de espera em segundos
+                    def sleepTime = 10 // intervalo entre verificações em segundos
+                    def iterations = timeout / sleepTime
+                    def allPodsRunning = false
+                    
+                    for (int i = 0; i < iterations; i++) {
+                        def getPods = sh(script: "kubectl get pods -n ${NAMESPACE} -o jsonpath='{.items[*].status.phase}'", returnStdout: true).trim()
+                        
+                        if (getPods.split(' ').every { it == 'Running' }) {
+                            allPodsRunning = true
+                            break
+                        }
+                        
+                        sleep time: sleepTime, unit: 'SECONDS'
+                    }
+                    
+                    if (!allPodsRunning) {
+                        error("Validation failed. Not all pods are in 'Running' state.")
+                    }
+                }
+            }
+        }
+    }
+}
