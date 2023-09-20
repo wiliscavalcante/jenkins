@@ -6,7 +6,7 @@ pipeline {
         DOCKER_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
         NAMESPACE = "sensoriamento"
         CHART_REPO_NAME = "agribusiness-helm-charts"
-        CHART_REPO_URL = "https://nexus.datalabserasaexperian.com.br/repository/agribusiness-helm-charts"  
+        CHART_REPO_URL = "https://nexus.com.br/repository/agribusiness-helm-charts"  
         CHART_VERSION = "2.0.0"
         CHART_NAME = "${CHART_REPO_NAME}/agribusiness-generic-app"
         HELM_RELEASE_NAME = "agrilearn-worker"
