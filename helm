@@ -1,7 +1,7 @@
 pipeline {
     agent any
     environment {
-        DOCKER_REGISTRY = "registry.datalabserasaexperian.com.br"
+        DOCKER_REGISTRY = "registry.com.br"
         DOCKER_IMAGE = "agribusiness/sensoriamento/agrilearn-worker"
         DOCKER_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
         NAMESPACE = "sensoriamento"
