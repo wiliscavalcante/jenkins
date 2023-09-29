@@ -6,7 +6,7 @@ pipeline {
         DOCKER_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
         NAMESPACE = "sensoriamento"
         CHART_REPO_NAME = "agribusiness-helm-charts"
-        CHART_REPO_URL = "https://nexus.d.com.br/repository/agribusiness-helm-charts"  
+        CHART_REPO_URL = "https://nexus.d.com.br/repository/agribusiness-helm-charts"
         CHART_VERSION = "2.0.0"
         CHART_NAME = "${CHART_REPO_NAME}/agribusiness-generic-app"
         HELM_RELEASE_NAME = "agrilearn-worker"
@@ -68,8 +68,14 @@ pipeline {
                         clusterName = "agribusiness-eks-${env}"
                         profile = "eec-agribusiness-${env}"
                     }
+                    
+                    def context = sh(script: "kubectl config get-contexts -o name | grep ${clusterName} || true", returnStdout: true).trim()
+                    if (context == '') {
+                        sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"
+                    } else {
+                        echo "Contexto ${clusterName} já configurado."
+                    }
 
-                    sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"
                     sh "helm repo add ${CHART_REPO_NAME} ${CHART_REPO_URL}"
                     sh "helm repo update"
                     sh "sed -i 's|tag: latest|tag: ${DOCKER_TAG}|' eks/${env}/worker/values.yaml"
@@ -87,14 +93,13 @@ pipeline {
             }
             steps {
                 script {
-                    def timeout = 120  // tempo de espera em segundos
-                    def sleepTime = 10 // intervalo entre verificações em segundos
+                    def timeout = 120
+                    def sleepTime = 10
                     def iterations = timeout / sleepTime
                     def allPodsRunning = false
 
                     for (int i = 0; i < iterations; i++) {
                         def getPods = sh(script: "kubectl get pods -n ${NAMESPACE} --selector=app=${HELM_RELEASE_NAME} -o jsonpath='{.items[*].status.phase}'", returnStdout: true).trim()
-                        
                         def podStatuses = getPods.split(' ')
                         
                         if (podStatuses.every { it == 'Running' }) {
