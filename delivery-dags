@@ -1,0 +1,50 @@
+pipeline {
+    agent any
+    environment {
+        NAMESPACE = "sensoriamento"
+    }
+    stages {
+        stage('Delivery dags') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def env = ''
+                    def clusterName = ""
+                    def profile = ""
+                    
+                    if (BRANCH_NAME == 'main') {
+                        env = 'prod'
+                    } else if (BRANCH_NAME == 'uat') {
+                        env = 'uat'
+                    } else if (BRANCH_NAME == 'dev') {
+                        env = 'dev'
+                    }
+                    
+                    clusterName = "agribusiness-eks-${env}"
+                    profile = "eec-agribusiness-${env}"
+                    
+                    // Atualizar o kubeconfig
+                    sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"
+                    
+                    // Criar ZIP com Terraform
+                    sh "cd terraform && terraform init && terraform apply -auto-approve"
+                    
+                    // Descobrir um pod que monta o PVC do airflow
+                    def airflowPod = sh(script: "kubectl get pods -n ${NAMESPACE} -l app=airflow -o jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
+                    
+                    // Copiar ZIP para o Pod do Airflow
+                    sh "kubectl cp terraform/dag-01.zip ${NAMESPACE}/${airflowPod}:/tmp/dag-01.zip"
+                    
+                    // Descompactar ZIP dentro do Pod, no diretório do PVC
+                    sh "kubectl exec ${airflowPod} -n ${NAMESPACE} -- unzip /tmp/dag-01.zip -d /path/to/your/pvc"
+                }
+            }
+        }
+    }
+}
