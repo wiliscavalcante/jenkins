@@ -18,6 +18,10 @@ pipeline {
                     def clusterName = ""
                     def profile = ""
 
+                    // Definindo o nome da pasta DAG com base no nome do repositório
+                    def repoUrl = env.GIT_URL
+                    def dagFolderName = repoUrl.split('/')[-1].replaceAll('.git$', '')
+
                     if (BRANCH_NAME == 'main') {
                         env = 'prod'
                     } else if (BRANCH_NAME == 'uat') {
@@ -32,9 +36,6 @@ pipeline {
                     // Atualizar o kubeconfig
                     sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"
                     
-                    // Zipar a pasta da DAG
-                    sh "zip -r dag-01.zip dag-01/"
-
                     // Criar o job do Kubernetes
                     sh '''
                         cat <<EOF | kubectl apply -f -
@@ -65,14 +66,11 @@ pipeline {
                     // Pegar o nome do pod gerado pelo job
                     def jobPod = sh(script: "kubectl get pods -n ${NAMESPACE} -l job-name=dag-delivery-job -o jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
 
-                    // Copiar ZIP para o Pod do Job
-                    sh "kubectl cp dag-01.zip ${NAMESPACE}/${jobPod}:/dags/dag-01.zip"
-                    
-                    // Descompactar ZIP dentro do Pod no diretório do PVC
-                    sh "kubectl exec ${jobPod} -n ${NAMESPACE} -- unzip /dags/dag-01.zip -d /dags/"
-                    
-                    // Remover o arquivo ZIP do pod
-                    sh "kubectl exec ${jobPod} -n ${NAMESPACE} -- rm /dags/dag-01.zip"
+                    // Remover a pasta antiga da DAG (caso exista)
+                    sh "kubectl exec ${jobPod} -n ${NAMESPACE} -- rm -rf /dags/${dagFolderName}"
+
+                    // Copiar pasta da DAG para o Pod do Job
+                    sh "kubectl cp ${dagFolderName} ${NAMESPACE}/${jobPod}:/dags/${dagFolderName}"
 
                     // Deletar o job
                     sh "kubectl delete job dag-delivery-job -n ${NAMESPACE}"
