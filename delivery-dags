@@ -3,6 +3,7 @@ pipeline {
     environment {
         NAMESPACE = "airflow"
         REPO_NAME = '' // Será definido dinamicamente no estágio de preparação
+        KUBECONFIG_PATH = '' // Deve ser definido no Jenkins ou passado como um parâmetro
     }
     stages {
         stage('Preparation') {
@@ -47,16 +48,16 @@ pipeline {
                     // Definindo 'env' globalmente para uso em estágios subsequentes
                     env.GLOBAL_ENV = env
 
-                    def context = sh(script: "kubectl config get-contexts -o name | grep ${clusterName} || true", returnStdout: true).trim()
+                    def context = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl config get-contexts -o name | grep ${clusterName} || true", returnStdout: true).trim()
                     if (context == '') {
-                        sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"
+                        sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName} --kubeconfig ${KUBECONFIG_PATH}"
                     } else {
                         echo "Contexto ${clusterName} já configurado."
                     }
 
                     // Cria um job no Kubernetes para fazer o deployment das DAGs
                     sh '''
-                    cat <<EOF | kubectl apply -f -
+                    KUBECONFIG=${KUBECONFIG_PATH} cat <<EOF | kubectl apply -f -
                     apiVersion: batch/v1
                     kind: Job
                     metadata:
@@ -93,7 +94,7 @@ pipeline {
                     def jobStatus = ''
                     def maxRetries = 10
                     for (int i = 0; i < maxRetries; i++) {
-                        jobStatus = sh(script: "kubectl get job deploy-dag-${REPO_NAME} -n ${NAMESPACE} -o=jsonpath='{.status.conditions[?(@.type==\"Complete\")].status}'", returnStdout: true).trim()
+                        jobStatus = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get job deploy-dag-${REPO_NAME} -n ${NAMESPACE} -o=jsonpath='{.status.conditions[?(@.type==\"Complete\")].status}'", returnStdout: true).trim()
                         if (jobStatus == "True") {
                             break
                         }
@@ -106,15 +107,15 @@ pipeline {
                     }
 
                     // Obtém o nome do Pod criado pelo Job
-                    def podName = sh(script: "kubectl get pods --namespace ${NAMESPACE} -l job-name=deploy-dag-${REPO_NAME} -o jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
+                    def podName = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get pods --namespace ${NAMESPACE} -l job-name=deploy-dag-${REPO_NAME} -o jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
 
                     // Copia o arquivo tarball para o Pod
-                    sh "kubectl cp repo.tar.gz ${NAMESPACE}/${podName}:/tmp/repo.tar.gz"
+                    sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl cp repo.tar.gz ${NAMESPACE}/${podName}:/tmp/repo.tar.gz"
 
                     // Limpa o Job e os Pods relacionados após o deployment (opcional)
                     sh """
-                    kubectl delete job deploy-dag-${REPO_NAME} -n ${NAMESPACE}
-                    kubectl delete pod -l job-name=deploy-dag-${REPO_NAME} -n ${NAMESPACE}
+                    KUBECONFIG=${KUBECONFIG_PATH} kubectl delete job deploy-dag-${REPO_NAME} -n ${NAMESPACE}
+                    KUBECONFIG=${KUBECONFIG_PATH} kubectl delete pod -l job-name=deploy-dag-${REPO_NAME} -n ${NAMESPACE}
                     """
                 }
             }
