@@ -4,6 +4,7 @@ pipeline {
         NAMESPACE = "airflow"
         REPO_NAME = '' // Será definido dinamicamente no estágio de preparação
         KUBECONFIG_PATH = '' // Deve ser definido no Jenkins ou passado como um parâmetro
+        GLOBAL_ENV = '' // Será definido dinamicamente com base no nome da branch
     }
     stages {
         stage('Preparation') {
@@ -37,103 +38,103 @@ pipeline {
             }
             steps {
                 script {
-                    def env = ''
+                    def envValue = ''
                     def clusterName = ''
                     def profile = ''
 
                     if (BRANCH_NAME == 'main') {
-                        env = 'prod'
-                        clusterName = "agribusiness-eks-${env}"
-                        profile = "eec-agribusiness-${env}"
+                        envValue = 'prod'
+                        clusterName = "agribusiness-eks-${envValue}"
+                        profile = "eec-agribusiness-${envValue}"
                     } else if (BRANCH_NAME == 'uat') {
-                        env = 'uat'
-                        clusterName = "agribusiness-eks-${env}"
-                        profile = "eec-agribusiness-${env}"
+                        envValue = 'uat'
+                        clusterName = "agribusiness-eks-${envValue}"
+                        profile = "eec-agribusiness-${envValue}"
                     } else if (BRANCH_NAME == 'dev') {
-                        env = 'dev'
-                        clusterName = "agribusiness-eks-${env}"
-                        profile = "eec-agribusiness-${env}"
+                        envValue = 'dev'
+                        clusterName = "agribusiness-eks-${envValue}"
+                        profile = "eec-agribusiness-${envValue}"
                     }
 
-                    // Definindo 'env' globalmente para uso em estágios subsequentes
-                    env.GLOBAL_ENV = env
+                    // Definindo 'GLOBAL_ENV' para uso em estágios subsequentes
+                    withEnv(["GLOBAL_ENV=${envValue}"]) {
+                        def context = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl config get-contexts -o name | grep ${clusterName} || true", returnStdout: true).trim()
+                        if (context == '') {
+                            sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName} --kubeconfig ${KUBECONFIG_PATH}"
+                        } else {
+                            echo "Contexto ${clusterName} já configurado."
+                        }
 
-                    def context = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl config get-contexts -o name | grep ${clusterName} || true", returnStdout: true).trim()
-                    if (context == '') {
-                        sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName} --kubeconfig ${KUBECONFIG_PATH}"
-                    } else {
-                        echo "Contexto ${clusterName} já configurado."
-                    }
-
-                    // Cria um job no Kubernetes para fazer o deployment das DAGs
-                    sh '''
-                    KUBECONFIG=${KUBECONFIG_PATH} cat <<EOF | kubectl apply -f -
-                    apiVersion: batch/v1
-                    kind: Job
-                    metadata:
-                      name: deploy-dag-'${REPO_NAME}'
-                      namespace: '${NAMESPACE}'
-                    spec:
-                      template:
+                        // Cria um job no Kubernetes para fazer o deployment das DAGs
+                        sh '''
+                        KUBECONFIG=${KUBECONFIG_PATH} cat <<EOF | kubectl apply -f -
+                        apiVersion: batch/v1
+                        kind: Job
+                        metadata:
+                          name: deploy-dag-'${REPO_NAME}'
+                          namespace: '${NAMESPACE}'
                         spec:
-                          containers:
-                          - name: deploy-dags
-                            image: alpine
-                            command: ["/bin/sh", "-c"]
-                            args:
-                            - |
-                              apk add --no-cache tar
-                              echo "Esperando por repo.tar.gz em /tmp"
-                              while [ ! -f /tmp/repo.tar.gz ]; do sleep 2; done
-                              echo "Arquivo repo.tar.gz encontrado, continuando..."
-                              # Verifica se a pasta existe e, em caso afirmativo, remove e recria
-                              if [ -d "/dags/${REPO_NAME}" ]; then
-                                echo "Diretório encontrado, removendo..."
-                                rm -rf /dags/${REPO_NAME}
-                              fi
-                              echo "Criando diretório ${REPO_NAME}..."
-                              mkdir -p /dags/${REPO_NAME}
-                              tar -xzvf /tmp/repo.tar.gz -C /dags/${REPO_NAME}
-                              echo "Descompactação concluída. Removendo o arquivo repo.tar.gz..."
-                              rm /tmp/repo.tar.gz
-                            volumeMounts:
-                            - name: airflow-dags
-                              mountPath: /dags
-                          restartPolicy: Never
-                          volumes:
-                          - name: airflow-dags
-                            persistentVolumeClaim:
-                              claimName: airflow-dags
-                    EOF
-                    '''
+                          template:
+                            spec:
+                              containers:
+                              - name: deploy-dags
+                                image: alpine
+                                command: ["/bin/sh", "-c"]
+                                args:
+                                - |
+                                  apk add --no-cache tar
+                                  echo "Esperando por repo.tar.gz em /tmp"
+                                  while [ ! -f /tmp/repo.tar.gz ]; do sleep 2; done
+                                  echo "Arquivo repo.tar.gz encontrado, continuando..."
+                                  # Verifica se a pasta existe e, em caso afirmativo, remove e recria
+                                  if [ -d "/dags/${REPO_NAME}" ]; then
+                                    echo "Diretório encontrado, removendo..."
+                                    rm -rf /dags/${REPO_NAME}
+                                  fi
+                                  echo "Criando diretório ${REPO_NAME}..."
+                                  mkdir -p /dags/${REPO_NAME}
+                                  tar -xzvf /tmp/repo.tar.gz -C /dags/${REPO_NAME}
+                                  echo "Descompactação concluída. Removendo o arquivo repo.tar.gz..."
+                                  rm /tmp/repo.tar.gz
+                                volumeMounts:
+                                - name: airflow-dags
+                                  mountPath: /dags
+                              restartPolicy: Never
+                              volumes:
+                              - name: airflow-dags
+                                persistentVolumeClaim:
+                                  claimName: airflow-dags
+                        EOF
+                        '''
 
-                    // Verifica o status do Job
-                    def jobStatus = ''
-                    def maxRetries = 10
-                    for (int i = 0; i < maxRetries; i++) {
-                        jobStatus = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get job deploy-dag-${REPO_NAME} -n ${NAMESPACE} -o=jsonpath='{.status.conditions[?(@.type==\"Complete\")].status}'", returnStdout: true).trim()
-                        if (jobStatus == "True") {
-                            break
+                        // Verifica o status do Job
+                        def jobStatus = ''
+                        def maxRetries = 10
+                        for (int i = 0; i < maxRetries; i++) {
+                            jobStatus = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get job deploy-dag-${REPO_NAME} -n ${NAMESPACE} -o=jsonpath='{.status.conditions[?(@.type==\"Complete\")].status}'", returnStdout: true).trim()
+                            if (jobStatus == "True") {
+                                break
+                            }
+                            if (i < maxRetries - 1) {
+                                sleep 30 // espera antes de tentar novamente
+                            }
                         }
-                        if (i < maxRetries - 1) {
-                            sleep 30 // espera antes de tentar novamente
+                        if (jobStatus != "True") {
+                            error "Deployment falhou - o Job do Kubernetes não foi concluído com êxito."
                         }
+
+                        // Obtém o nome do Pod criado pelo Job
+                        def podName = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get pods --namespace ${NAMESPACE} -l job-name=deploy-dag-${REPO_NAME} -o jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
+
+                        // Copia o arquivo tarball para o Pod
+                        sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl cp repo.tar.gz ${NAMESPACE}/${podName}:/tmp/repo.tar.gz"
+
+                        // Limpa o Job e os Pods relacionados após o deployment (opcional)
+                        sh """
+                        KUBECONFIG=${KUBECONFIG_PATH} kubectl delete job deploy-dag-${REPO_NAME} -n ${NAMESPACE}
+                        KUBECONFIG=${KUBECONFIG_PATH} kubectl delete pod -l job-name=deploy-dag-${REPO_NAME} -n ${NAMESPACE}
+                        """
                     }
-                    if (jobStatus != "True") {
-                        error "Deployment falhou - o Job do Kubernetes não foi concluído com êxito."
-                    }
-
-                    // Obtém o nome do Pod criado pelo Job
-                    def podName = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get pods --namespace ${NAMESPACE} -l job-name=deploy-dag-${REPO_NAME} -o jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
-
-                    // Copia o arquivo tarball para o Pod
-                    sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl cp repo.tar.gz ${NAMESPACE}/${podName}:/tmp/repo.tar.gz"
-
-                    // Limpa o Job e os Pods relacionados após o deployment (opcional)
-                    sh """
-                    KUBECONFIG=${KUBECONFIG_PATH} kubectl delete job deploy-dag-${REPO_NAME} -n ${NAMESPACE}
-                    KUBECONFIG=${KUBECONFIG_PATH} kubectl delete pod -l job-name=deploy-dag-${REPO_NAME} -n ${NAMESPACE}
-                    """
                 }
             }
         }
