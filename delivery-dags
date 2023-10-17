@@ -67,12 +67,12 @@ pipeline {
 
                         // Cria um job no Kubernetes para fazer o deployment das DAGs
                         sh '''
-                        KUBECONFIG=${KUBECONFIG_PATH} cat <<EOF | kubectl apply -f -
+                        KUBECONFIG=${KUBECONFIG_PATH} kubectl apply -f - <<EOF
                         apiVersion: batch/v1
                         kind: Job
                         metadata:
-                          name: deploy-dag-'${REPO_NAME}'
-                          namespace: '${NAMESPACE}'
+                          name: deploy-dag-${REPO_NAME}
+                          namespace: ${NAMESPACE}
                         spec:
                           template:
                             spec:
