@@ -9,11 +9,21 @@ pipeline {
         stage('Preparation') {
             steps {
                 script {
-                    // Extrair o nome do repositório do URL do Git
-                    REPO_NAME = sh(script: 'basename -s .git `git config --get remote.origin.url`', returnStdout: true).trim()
+                    try {
+                        // Tentativa de extrair o nome do repositório do URL do Git
+                        echo 'Tentando extrair o nome do repositório...'
+                        REPO_NAME = sh(script: 'basename -s .git `git config --get remote.origin.url`', returnStdout: true).trim()
+                        echo "Nome do repositório: ${REPO_NAME}"
 
-                    // Aqui vamos compactar o conteúdo do workspace
-                    sh 'tar -czvf repo.tar.gz .'
+                        // Tentativa de compactar o conteúdo do workspace
+                        echo 'Tentando compactar o repositório...'
+                        sh 'tar -czvf repo.tar.gz .'
+                        echo 'Repositório compactado com sucesso.'
+                    } catch (Exception e) {
+                        // Captura qualquer exceção que ocorra durante o estágio de preparação e imprime uma mensagem de erro detalhada.
+                        echo "Erro no estágio de preparação: ${e.getMessage()}"
+                        error "Falha no estágio de preparação." // Isso marca o build como falho e termina a execução.
+                    }
                 }
             }
         }
