@@ -2,7 +2,6 @@ pipeline {
     agent any
     environment {
         NAMESPACE = "airflow"
-        PVC_PATH = '/dags' // PVC path para as DAGs no Airflow
         REPO_NAME = '' // Será definido dinamicamente no estágio de preparação
     }
     stages {
@@ -13,9 +12,7 @@ pipeline {
                     REPO_NAME = sh(script: 'basename -s .git `git config --get remote.origin.url`', returnStdout: true).trim()
 
                     // Aqui vamos compactar o conteúdo do workspace
-                    sh '''
-                    tar -czvf repo.tar.gz .
-                    '''
+                    sh 'tar -czvf repo.tar.gz .'
                 }
             }
         }
@@ -63,8 +60,8 @@ pipeline {
                     apiVersion: batch/v1
                     kind: Job
                     metadata:
-                      name: deploy-dag-''' + REPO_NAME + '''
-                      namespace: ''' + NAMESPACE + '''
+                      name: deploy-dag-'${REPO_NAME}'
+                      namespace: '${NAMESPACE}'
                     spec:
                       template:
                         spec:
@@ -78,22 +75,21 @@ pipeline {
                               echo "Esperando por repo.tar.gz em /tmp"
                               while [ ! -f /tmp/repo.tar.gz ]; do sleep 2; done
                               echo "Arquivo repo.tar.gz encontrado, continuando..."
-                              if [ -d "''' + PVC_PATH + '''/''' + REPO_NAME + '''" ]; then
-                                rm -rf "''' + PVC_PATH + '''/''' + REPO_NAME + '''"
-                              fi
-                              mkdir -p "''' + PVC_PATH + '''/''' + REPO_NAME + '''"
-                              tar -xzvf /tmp/repo.tar.gz -C "''' + PVC_PATH + '''/''' + REPO_NAME + '''"
+                              tar -xzvf /tmp/repo.tar.gz -C /dags
+                              echo "Descompactação concluída. Removendo o arquivo repo.tar.gz..."
+                              rm /tmp/repo.tar.gz
                             volumeMounts:
                             - name: airflow-dags
-                              mountPath: "''' + PVC_PATH + '''"
+                              mountPath: /dags
                           restartPolicy: Never
                           volumes:
                           - name: airflow-dags
                             persistentVolumeClaim:
                               claimName: airflow-dags
-                    EOF                    '''
+                    EOF
+                    '''
 
-                    // Verifica o status do Job, ao invés de usar 'sleep'
+                    // Verifica o status do Job
                     def jobStatus = ''
                     def maxRetries = 10
                     for (int i = 0; i < maxRetries; i++) {
