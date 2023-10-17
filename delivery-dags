@@ -76,7 +76,14 @@ pipeline {
                               echo "Esperando por repo.tar.gz em /tmp"
                               while [ ! -f /tmp/repo.tar.gz ]; do sleep 2; done
                               echo "Arquivo repo.tar.gz encontrado, continuando..."
-                              tar -xzvf /tmp/repo.tar.gz -C /dags
+                              # Verifica se a pasta existe e, em caso afirmativo, remove e recria
+                              if [ -d "/dags/${REPO_NAME}" ]; then
+                                echo "Diretório encontrado, removendo..."
+                                rm -rf /dags/${REPO_NAME}
+                              fi
+                              echo "Criando diretório ${REPO_NAME}..."
+                              mkdir -p /dags/${REPO_NAME}
+                              tar -xzvf /tmp/repo.tar.gz -C /dags/${REPO_NAME}
                               echo "Descompactação concluída. Removendo o arquivo repo.tar.gz..."
                               rm /tmp/repo.tar.gz
                             volumeMounts:
