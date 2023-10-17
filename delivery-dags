@@ -1,10 +1,25 @@
 pipeline {
     agent any
     environment {
-        NAMESPACE = "sensoriamento"
+        NAMESPACE = "airflow"
+        PVC_PATH = '/dags' // PVC path para as DAGs no Airflow
+        REPO_NAME = '' // Será definido dinamicamente no estágio de preparação
     }
     stages {
-        stage('Delivery dags') {
+        stage('Preparation') {
+            steps {
+                script {
+                    // Extrair o nome do repositório do URL do Git
+                    REPO_NAME = sh(script: 'basename -s .git `git config --get remote.origin.url`', returnStdout: true).trim()
+
+                    // Aqui vamos compactar o conteúdo do workspace
+                    sh '''
+                    tar -czvf repo.tar.gz .
+                    '''
+                }
+            }
+        }
+        stage('DAG Deployment') {
             when {
                 anyOf {
                     branch 'main'
@@ -15,65 +30,96 @@ pipeline {
             steps {
                 script {
                     def env = ''
-                    def clusterName = ""
-                    def profile = ""
-
-                    // Definindo o nome da pasta DAG com base no nome do repositório
-                    def repoUrl = env.GIT_URL
-                    def dagFolderName = repoUrl.split('/')[-1].replaceAll('.git$', '')
+                    def clusterName = ''
+                    def profile = ''
 
                     if (BRANCH_NAME == 'main') {
                         env = 'prod'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
                     } else if (BRANCH_NAME == 'uat') {
                         env = 'uat'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
                     } else if (BRANCH_NAME == 'dev') {
                         env = 'dev'
+                        clusterName = "agribusiness-eks-${env}"
+                        profile = "eec-agribusiness-${env}"
                     }
 
-                    clusterName = "agribusiness-eks-${env}"
-                    profile = "eec-agribusiness-${env}"
+                    // Definindo 'env' globalmente para uso em estágios subsequentes
+                    env.GLOBAL_ENV = env
 
-                    // Atualizar o kubeconfig
-                    sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"
-                    
-                    // Criar o job do Kubernetes
+                    def context = sh(script: "kubectl config get-contexts -o name | grep ${clusterName} || true", returnStdout: true).trim()
+                    if (context == '') {
+                        sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"
+                    } else {
+                        echo "Contexto ${clusterName} já configurado."
+                    }
+
+                    // Cria um job no Kubernetes para fazer o deployment das DAGs
                     sh '''
-                        cat <<EOF | kubectl apply -f -
-                        apiVersion: batch/v1
-                        kind: Job
-                        metadata:
-                          name: dag-delivery-job
-                          namespace: ${NAMESPACE}
+                    cat <<EOF | kubectl apply -f -
+                    apiVersion: batch/v1
+                    kind: Job
+                    metadata:
+                      name: deploy-dag-''' + REPO_NAME + '''
+                      namespace: ''' + NAMESPACE + '''
+                    spec:
+                      template:
                         spec:
-                          template:
-                            spec:
-                              containers:
-                              - name: ubuntu
-                                image: ubuntu:latest
-                                command: ["/bin/sleep", "infinity"]
-                                volumeMounts:
-                                - name: airflow-dags
-                                  mountPath: /dags
-                              volumes:
-                              - name: airflow-dags
-                                persistentVolumeClaim:
-                                  claimName: airflow-dags-pvc
-                              restartPolicy: Never
-                          backoffLimit: 1
-                        EOF
-                    '''
+                          containers:
+                          - name: deploy-dags
+                            image: alpine
+                            command: ["/bin/sh", "-c"]
+                            args:
+                            - |
+                              apk add --no-cache tar
+                              echo "Esperando por repo.tar.gz em /tmp"
+                              while [ ! -f /tmp/repo.tar.gz ]; do sleep 2; done
+                              echo "Arquivo repo.tar.gz encontrado, continuando..."
+                              if [ -d "''' + PVC_PATH + '''/''' + REPO_NAME + '''" ]; then
+                                rm -rf "''' + PVC_PATH + '''/''' + REPO_NAME + '''"
+                              fi
+                              mkdir -p "''' + PVC_PATH + '''/''' + REPO_NAME + '''"
+                              tar -xzvf /tmp/repo.tar.gz -C "''' + PVC_PATH + '''/''' + REPO_NAME + '''"
+                            volumeMounts:
+                            - name: airflow-dags
+                              mountPath: "''' + PVC_PATH + '''"
+                          restartPolicy: Never
+                          volumes:
+                          - name: airflow-dags
+                            persistentVolumeClaim:
+                              claimName: airflow-dags
+                    EOF                    '''
 
-                    // Pegar o nome do pod gerado pelo job
-                    def jobPod = sh(script: "kubectl get pods -n ${NAMESPACE} -l job-name=dag-delivery-job -o jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
+                    // Verifica o status do Job, ao invés de usar 'sleep'
+                    def jobStatus = ''
+                    def maxRetries = 10
+                    for (int i = 0; i < maxRetries; i++) {
+                        jobStatus = sh(script: "kubectl get job deploy-dag-${REPO_NAME} -n ${NAMESPACE} -o=jsonpath='{.status.conditions[?(@.type==\"Complete\")].status}'", returnStdout: true).trim()
+                        if (jobStatus == "True") {
+                            break
+                        }
+                        if (i < maxRetries - 1) {
+                            sleep 30 // espera antes de tentar novamente
+                        }
+                    }
+                    if (jobStatus != "True") {
+                        error "Deployment falhou - o Job do Kubernetes não foi concluído com êxito."
+                    }
 
-                    // Remover a pasta antiga da DAG (caso exista)
-                    sh "kubectl exec ${jobPod} -n ${NAMESPACE} -- rm -rf /dags/${dagFolderName}"
+                    // Obtém o nome do Pod criado pelo Job
+                    def podName = sh(script: "kubectl get pods --namespace ${NAMESPACE} -l job-name=deploy-dag-${REPO_NAME} -o jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
 
-                    // Copiar pasta da DAG para o Pod do Job
-                    sh "kubectl cp ${dagFolderName} ${NAMESPACE}/${jobPod}:/dags/${dagFolderName}"
+                    // Copia o arquivo tarball para o Pod
+                    sh "kubectl cp repo.tar.gz ${NAMESPACE}/${podName}:/tmp/repo.tar.gz"
 
-                    // Deletar o job
-                    sh "kubectl delete job dag-delivery-job -n ${NAMESPACE}"
+                    // Limpa o Job e os Pods relacionados após o deployment (opcional)
+                    sh """
+                    kubectl delete job deploy-dag-${REPO_NAME} -n ${NAMESPACE}
+                    kubectl delete pod -l job-name=deploy-dag-${REPO_NAME} -n ${NAMESPACE}
+                    """
                 }
             }
         }
