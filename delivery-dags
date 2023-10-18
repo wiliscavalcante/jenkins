@@ -11,19 +11,16 @@ pipeline {
             steps {
                 script {
                     try {
-                        // Tentativa de extrair o nome do repositório do URL do Git
                         echo 'Tentando extrair o nome do repositório...'
                         REPO_NAME = sh(script: 'basename -s .git `git config --get remote.origin.url`', returnStdout: true).trim()
                         echo "Nome do repositório: ${REPO_NAME}"
 
-                        // Tentativa de compactar o conteúdo do workspace
                         echo 'Tentando compactar o repositório...'
                         sh 'tar -czvf repo.tar.gz .'
                         echo 'Repositório compactado com sucesso.'
                     } catch (Exception e) {
-                        // Captura qualquer exceção que ocorra durante o estágio de preparação e imprime uma mensagem de erro detalhada.
                         echo "Erro no estágio de preparação: ${e.getMessage()}"
-                        error "Falha no estágio de preparação." // Isso marca o build como falho e termina a execução.
+                        error "Falha no estágio de preparação."
                     }
                 }
             }
@@ -56,14 +53,9 @@ pipeline {
                         profile = "eec-agribusiness-${envValue}"
                     }
 
-                    // Definindo 'GLOBAL_ENV' para uso em estágios subsequentes
                     withEnv(["GLOBAL_ENV=${envValue}"]) {
-                        def context = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl config get-contexts -o name | grep ${clusterName} || true", returnStdout: true).trim()
-                        if (context == '') {
-                            sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName} --kubeconfig ${KUBECONFIG_PATH}"
-                        } else {
-                            echo "Contexto ${clusterName} já configurado."
-                        }
+                        // Atualiza o kubeconfig, garantindo que o contexto correto esteja configurado como padrão
+                        sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName} --kubeconfig ${KUBECONFIG_PATH}"
 
                         // Teste de conectividade com o cluster
                         def nodes = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get nodes", returnStdout: true).trim()
