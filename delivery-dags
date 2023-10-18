@@ -65,6 +65,10 @@ pipeline {
                             echo "Contexto ${clusterName} já configurado."
                         }
 
+                        // Teste de conectividade com o cluster
+                        def nodes = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get nodes", returnStdout: true).trim()
+                        echo "Nodes no cluster: \n${nodes}"
+
                         // Escreve o arquivo YAML no workspace
                         writeFile file: 'job.yaml', text: """
                         apiVersion: batch/v1
@@ -119,39 +123,26 @@ pipeline {
                         def maxRetries = 10
                         for (int i = 0; i < maxRetries; i++) {
                             jobStatus = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get job deploy-dag-${REPO_NAME} -n ${NAMESPACE} -o=jsonpath='{.status.conditions[?(@.type==\"Complete\")].status}'", returnStdout: true).trim()
-                            if (jobStatus == "True") {
+
+                            if (jobStatus == 'True') {
+                                echo "O job foi concluído com sucesso."
                                 break
+                            } else if (i < maxRetries - 1) {
+                                echo "O job ainda não está completo. Tentativa ${i + 1} de ${maxRetries}. Aguardando 30 segundos antes da próxima verificação..."
+                                sleep 30
+                            } else {
+                                error "O job não foi concluído após ${maxRetries} tentativas. O processo falhou."
                             }
-                            if (i < maxRetries - 1) {
-                                sleep 30 // espera antes de tentar novamente
-                            }
                         }
-                        if (jobStatus != "True") {
-                            error "Deployment falhou - o Job do Kubernetes não foi concluído com êxito."
-                        }
-
-                        // Obtém o nome do Pod criado pelo Job
-                        def podName = ''
-                        try {
-                            podName = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get pods --namespace ${NAMESPACE} -l job-name=deploy-dag-${REPO_NAME} -o jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
-                        } catch (Exception e) {
-                            error "Falha ao obter o nome do pod: ${e.message}"
-                        }
-
-                        if (podName == '') {
-                            error "Nenhum pod foi criado para o job."
-                        }
-
-                        echo "Nome do Pod: ${podName}"
-
-                        // Copia o arquivo tarball para o Pod
-                        sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl cp repo.tar.gz ${NAMESPACE}/${podName}:/tmp/repo.tar.gz"
-
-                        // Limpa o Job e os Pods relacionados após o deployment (opcional)
-                        sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl delete job deploy-dag-${REPO_NAME} -n ${NAMESPACE}"
                     }
                 }
             }
+        }
+    }
+    post {
+        always {
+            // Lógica para limpeza ou notificações, se necessário
+            echo 'Execução do Pipeline concluída.'
         }
     }
 }
