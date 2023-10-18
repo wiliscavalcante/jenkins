@@ -54,14 +54,14 @@ pipeline {
                     }
 
                     withEnv(["GLOBAL_ENV=${envValue}"]) {
-                        // Atualiza o kubeconfig, garantindo que o contexto correto esteja configurado como padrão
+                        // Atualiza o kubeconfig
                         sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName} --kubeconfig ${KUBECONFIG_PATH}"
 
                         // Teste de conectividade com o cluster
                         def nodes = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get nodes", returnStdout: true).trim()
                         echo "Nodes no cluster: \n${nodes}"
 
-                        // Escreve o arquivo YAML no workspace
+                        // Criação do Pod que apenas monta o PVC
                         writeFile file: 'pod.yaml', text: """
                         apiVersion: v1
                         kind: Pod
@@ -70,89 +70,42 @@ pipeline {
                           namespace: ${NAMESPACE}
                         spec:
                           containers:
-                          - name: deploy-dags
+                          - name: dag-deployment-container
                             image: alpine
-                            command: ["/bin/sh", "-c"]
-                            args:
-                            - |
-                              apk add --no-cache tar
-                              echo "Esperando por repo.tar.gz em /tmp"
-                              while [ ! -f /tmp/repo.tar.gz ]; do sleep 2; done
-                              echo "Arquivo repo.tar.gz encontrado, continuando..."
-                              if [ -d "/dags/${REPO_NAME}" ]; then
-                                echo "Diretório encontrado, removendo..."
-                                rm -rf /dags/${REPO_NAME}"
-                              fi
-                              echo "Criando diretório ${REPO_NAME}..."
-                              mkdir -p /dags/${REPO_NAME}
-                              tar -xzvf /tmp/repo.tar.gz -C /dags/${REPO_NAME}
-                              echo "Descompactação concluída. Removendo o arquivo repo.tar.gz..."
-                              rm /tmp/repo.tar.gz
+                            command: ["/bin/sh", "-c", "--"]
+                            args: ["while true; do sleep 30; done;"]
                             volumeMounts:
-                            - name: airflow-dags
-                              mountPath: /dags
-                          restartPolicy: Never
+                            - mountPath: /dags
+                              name: airflow-dags
                           volumes:
                           - name: airflow-dags
                             persistentVolumeClaim:
                               claimName: airflow-dags
                         """
+                        // Inicia o Pod
+                        sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl apply -f pod.yaml"
 
-                        // Aplica o arquivo YAML
-                        def kubectlApplyOutput = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl apply -f pod.yaml", returnStdout: true).trim()
-                        echo "Saída do kubectl apply: ${kubectlApplyOutput}"
+                        // Aguarda o Pod ficar disponível
+                        sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl wait --for=condition=ready pod deploy-dag-${REPO_NAME} -n ${NAMESPACE} --timeout=600s"
 
-                        // Aguarda até que o Pod esteja em execução
-                        echo 'Aguardando o Pod iniciar...'
-                        sh """
-                        KUBECONFIG=${KUBECONFIG_PATH} kubectl wait --for=condition=ready pod deploy-dag-${REPO_NAME} -n ${NAMESPACE} --timeout=600s
-                        """
+                        // Checar se o diretório do repositório existe e removê-lo
+                        sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl exec -n ${NAMESPACE} deploy-dag-${REPO_NAME} -- /bin/sh -c 'rm -rf /dags/${REPO_NAME} && mkdir -p /dags/${REPO_NAME}'"
 
-                        // Obtenha o nome do Pod em execução
-                        def podName = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get pods --namespace=${NAMESPACE} -l app=deploy-dag-${REPO_NAME} -o=jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
-                        echo "O Pod está em execução no Pod: ${podName}"
+                        // Copiar o tarball para o diretório correto no PVC e extrair
+                        sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl cp repo.tar.gz ${NAMESPACE}/deploy-dag-${REPO_NAME}:/dags/${REPO_NAME}/repo.tar.gz"
+                        sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl exec -n ${NAMESPACE} deploy-dag-${REPO_NAME} -- /bin/sh -c 'tar -xzvf /dags/${REPO_NAME}/repo.tar.gz -C /dags/${REPO_NAME} && rm /dags/${REPO_NAME}/repo.tar.gz'"
 
-                        // Copie o repo.tar.gz para o Pod
-                        echo 'Copiando repo.tar.gz para o Pod...'
-                        sh """
-                        KUBECONFIG=${KUBECONFIG_PATH} kubectl cp repo.tar.gz ${NAMESPACE}/${podName}:/tmp/repo.tar.gz
-                        """
-
-                        // Monitora o status do Pod para verificar se a tarefa foi concluída com sucesso.
-                        def podStatus = ''
-                        def maxRetries = 20
-                        for (int i = 0; i < maxRetries; i++) {
-                            podStatus = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get pod ${podName} -n ${NAMESPACE} -o=jsonpath='{.status.phase}'", returnStdout: true).trim()
-
-                            if (podStatus == 'Succeeded') {
-                                echo "O Pod concluiu a tarefa com sucesso."
-                                break
-                            } else if (podStatus == 'Failed') { // O status do Pod é 'Failed', algo deu errado
-                                // Obtém e imprime os logs do Pod para diagnóstico
-                                echo "O Pod falhou. Aqui estão os logs:"
-                                sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl logs ${podName} -n ${NAMESPACE}"
-        
-                                // Imprime os eventos do Pod para entender o que aconteceu
-                                echo "Eventos do Pod:"
-                                sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl get events --field-selector involvedObject.name=${podName} -n ${NAMESPACE}"
-        
-                                error "O Pod falhou, verifique os logs e eventos para detalhes."
-                            } else if (i < maxRetries - 1) {
-                                echo "A tarefa ainda não está completa. Tentativa ${i + 1} de ${maxRetries}. Aguardando 30 segundos antes da próxima verificação..."
-                                sleep 30
-                            } else {
-                                error "A tarefa não foi concluída após ${maxRetries} tentativas. O processo falhou."
-                            }
-                        }
-
-                        // Após a conclusão, delete o Pod
-                        echo 'Deletando o Pod...'
-                        sh """
-                        KUBECONFIG=${KUBECONFIG_PATH} kubectl delete pod ${podName} -n ${NAMESPACE}
-                        """
+                        // Remover o Pod após a operação
+                        sh "KUBECONFIG=${KUBECONFIG_PATH} kubectl delete pod deploy-dag-${REPO_NAME} -n ${NAMESPACE}"
                     }
                 }
             }
+        }
+    }
+    post {
+        always {
+            // Lógica para limpeza ou notificações, se necessário
+            echo 'Execução do Pipeline concluída.'
         }
     }
 }
