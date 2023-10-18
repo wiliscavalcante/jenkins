@@ -104,11 +104,21 @@ pipeline {
                         def kubectlApplyOutput = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl apply -f job.yaml", returnStdout: true).trim()
                         echo "Saída do kubectl apply: ${kubectlApplyOutput}"
 
-                        // Checa se o job foi criado
-                        def jobExists = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get job deploy-dag-${REPO_NAME} -n ${NAMESPACE}", returnStdout: true).trim()
-                        if (jobExists == '') {
-                            error "O job não existe. A criação do job falhou."
-                        }
+                        // Aguarda até que o Job esteja em execução
+                        echo 'Aguardando o Job iniciar...'
+                        sh """
+                        KUBECONFIG=${KUBECONFIG_PATH} kubectl wait --for=condition=ready pod -l job-name=deploy-dag-${REPO_NAME} -n ${NAMESPACE} --timeout=600s
+                        """
+
+                        // Obtenha o nome do Pod em execução para o Job
+                        def podName = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl get pods --namespace=${NAMESPACE} -l job-name=deploy-dag-${REPO_NAME} -o=jsonpath='{.items[0].metadata.name}'", returnStdout: true).trim()
+                        echo "O Job está em execução no Pod: ${podName}"
+
+                        // Copie o repo.tar.gz para o Pod
+                        echo 'Copiando repo.tar.gz para o Pod...'
+                        sh """
+                        KUBECONFIG=${KUBECONFIG_PATH} kubectl cp repo.tar.gz ${NAMESPACE}/${podName}:/tmp/repo.tar.gz
+                        """
 
                         // Verifica o status do Job
                         def jobStatus = ''
