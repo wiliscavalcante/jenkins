@@ -1,9 +1,9 @@
 pipeline {
     agent any
     environment {
-        NAMESPACE = "dataupdate-core"
+        NAMESPACE = "airflow"
         REPO_NAME = '' // Será definido dinamicamente no estágio de preparação
-        KUBECONFIG_PATH = '/var/lib/jenkins/.kube/config-agro' // Deve ser definido no Jenkins ou passado como um parâmetro
+        KUBECONFIG_PATH = '' // Deve ser definido no Jenkins ou passado como um parâmetro
         GLOBAL_ENV = '' // Será definido dinamicamente com base no nome da branch
     }
     stages {
@@ -18,7 +18,7 @@ pipeline {
 
                         // Tentativa de compactar o conteúdo do workspace
                         echo 'Tentando compactar o repositório...'
-                        sh 'tar --exclude=repo.tar.gz -czvf repo.tar.gz .'
+                        sh 'tar -czvf repo.tar.gz .'
                         echo 'Repositório compactado com sucesso.'
                     } catch (Exception e) {
                         // Captura qualquer exceção que ocorra durante o estágio de preparação e imprime uma mensagem de erro detalhada.
@@ -65,14 +65,13 @@ pipeline {
                             echo "Contexto ${clusterName} já configurado."
                         }
 
-                        // Escreve o arquivo de definição do job
-                        sh '''
-                        cat > job.yaml <<EOF
+                        // Escreve o arquivo YAML no workspace
+                        writeFile file: 'job.yaml', text: """
                         apiVersion: batch/v1
                         kind: Job
                         metadata:
-                          name: deploy-dag-'${REPO_NAME}'
-                          namespace: '${NAMESPACE}'
+                          name: deploy-dag-${REPO_NAME}
+                          namespace: ${NAMESPACE}
                         spec:
                           template:
                             spec:
@@ -86,7 +85,6 @@ pipeline {
                                   echo "Esperando por repo.tar.gz em /tmp"
                                   while [ ! -f /tmp/repo.tar.gz ]; do sleep 2; done
                                   echo "Arquivo repo.tar.gz encontrado, continuando..."
-                                  # Verifica se a pasta existe e, em caso afirmativo, remove e recria
                                   if [ -d "/dags/${REPO_NAME}" ]; then
                                     echo "Diretório encontrado, removendo..."
                                     rm -rf /dags/${REPO_NAME}"
@@ -103,9 +101,8 @@ pipeline {
                               volumes:
                               - name: airflow-dags
                                 persistentVolumeClaim:
-                                  claimName: airflow-dataops-dags
-                        EOF
-                        '''
+                                  claimName: airflow-dags
+                        """
 
                         // Aplica o arquivo YAML
                         def kubectlApplyOutput = sh(script: "KUBECONFIG=${KUBECONFIG_PATH} kubectl apply -f job.yaml", returnStdout: true).trim()
