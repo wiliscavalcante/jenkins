@@ -1,0 +1,21 @@
+# Use uma imagem base do Ubuntu
+FROM ubuntu:latest
+
+# Define variáveis de ambiente para evitar prompts
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Instalação de utilitários necessários
+RUN apt-get update && apt-get install -y \
+    awscli \
+    unzip \
+    cron \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar o script para a imagem
+COPY script.sh /script.sh
+
+# Tornar o script executável
+RUN chmod +x /script.sh
+
+# Comando padrão para executar o script
+CMD ["/script.sh"]
