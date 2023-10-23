@@ -1,21 +1,17 @@
-# Use uma imagem base do Ubuntu
-FROM ubuntu:latest
+# Use uma imagem oficial do Python como imagem base (ajuste a tag conforme necessário)
+FROM python:3.8-slim
 
-# Define variáveis de ambiente para evitar prompts
-ARG DEBIAN_FRONTEND=noninteractive
+# Defina o diretório de trabalho no contêiner
+WORKDIR /app
 
-# Instalação de utilitários necessários
-RUN apt-get update && apt-get install -y \
-    awscli \
-    unzip \
-    cron \
-    && rm -rf /var/lib/apt/lists/*
+# Copie o script para o contêiner
+COPY sync-dags.sh .
 
-# Copiar o script para a imagem
-COPY script.sh /script.sh
+# Instale o AWS CLI (necessário para interagir com o S3)
+RUN pip install awscli
 
-# Tornar o script executável
-RUN chmod +x /script.sh
+# Dê permissão de execução ao script
+RUN chmod +x sync-dags.sh
 
-# Comando padrão para executar o script
-CMD ["/script.sh"]
+# Comando a ser executado quando o contêiner iniciar
+CMD ["/app/sync-dags.sh"]
