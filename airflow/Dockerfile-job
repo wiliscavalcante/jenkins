@@ -15,3 +15,20 @@ RUN chmod +x sync-dags.sh
 
 # Comando a ser executado quando o contêiner iniciar
 CMD ["/app/sync-dags.sh"]
+################
+FROM alpine:latest
+
+# Defina o diretório de trabalho no contêiner
+WORKDIR /app
+
+# Copie o script para o contêiner
+COPY sync-dags.sh .
+
+# Instale o AWS CLI e outras dependências (ajuste conforme necessário)
+RUN apk --no-cache add python3 py3-pip && \
+    pip3 install --upgrade pip && \
+    pip3 install awscli && \
+    chmod +x sync-dags.sh
+
+# Comando a ser executado quando o contêiner iniciar
+CMD ["/app/sync-dags.sh"]
