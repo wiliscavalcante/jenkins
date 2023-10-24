@@ -1,0 +1,30 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: dag-sync-cron-job
+  namespace: seu-namespace # Substitua pelo seu namespace
+spec:
+  schedule: "*/2 * * * *" # A cada 2 minutos
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: airflow-sa
+          containers:
+          - name: dag-sync
+            image: SEU_REGISTRO/SEU_IMAGEM:TAG # Substitua pelo caminho da sua imagem Docker
+            env:
+            - name: BUCKET_NAME
+              value: "nome-do-seu-bucket" # Substitua pelo nome do seu bucket
+            - name: LOCAL_TEMP_DIR
+              value: "/tmp"
+            - name: PVC_DIR
+              value: "/data"
+            volumeMounts:
+            - name: pvc-storage
+              mountPath: "/data"
+          volumes:
+          - name: pvc-storage
+            persistentVolumeClaim:
+              claimName: nome-do-seu-pvc # Substitua pelo nome do seu PVC
+          restartPolicy: OnFailure
