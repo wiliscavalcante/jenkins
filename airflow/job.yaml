@@ -5,6 +5,8 @@ metadata:
   namespace: seu-namespace # Substitua pelo seu namespace
 spec:
   schedule: "*/2 * * * *" # A cada 2 minutos
+  successfulJobsHistoryLimit: 3 # número de execuções bem-sucedidas a serem mantidas
+  failedJobsHistoryLimit: 1     # número de execuções com falha a serem mantidas
   jobTemplate:
     spec:
       template:
