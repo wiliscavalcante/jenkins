@@ -101,6 +101,12 @@
 
 #!/bin/bash
 
+# Função para converter o formato de data
+convert_date_format() {
+    local date_string="$1"
+    date -d"${date_string}" +'%Y-%m-%d %H:%M:%S'
+}
+
 # Configurações
 BUCKET_NAME="infra-teste-be"  # Substitua pelo nome do seu bucket S3
 S3_DAGS_DIRECTORY="s3://${BUCKET_NAME}/"  # Caminho no S3 para as Dags
@@ -124,14 +130,15 @@ for folder in $folders; do
   zipfile_path="${S3_DAGS_DIRECTORY}${folder}/${folder}.zip"
   local_zipfile="${LOCAL_TEMP_DIRECTORY}/${folder}.zip"
 
-  # Obtém o timestamp do arquivo no S3 em segundos desde a época
+  # Obtém o timestamp do arquivo no S3
   s3_timestamp=$(aws s3api head-object --bucket "${BUCKET_NAME}" --key "${folder}/${folder}.zip" --query "LastModified" --output text)
-  s3_seconds=$(date --date="${s3_timestamp}" +%s)
+  s3_formatted_date=$(convert_date_format "$s3_timestamp")
+  s3_seconds=$(date --date="${s3_formatted_date}" +%s)
 
-  # Obtém o timestamp do arquivo local em segundos desde a época
-  local_seconds=""
+  # Verifica se o arquivo existe no diretório local e obtém seu timestamp
+  local_timestamp=""
   if [ -f "${local_zipfile}" ]; then
-    local_seconds=$(stat -c %Y "${local_zipfile}")
+    local_timestamp=$(stat -c %Y "${local_zipfile}")
   fi
 
   # Verifica se a pasta DAG ainda existe
@@ -140,14 +147,20 @@ for folder in $folders; do
       dag_folder_exists="false"
   fi
 
-  # Lê o timestamp registrado para esta pasta em segundos desde a época
-  recorded_seconds=""
+  # Lê o timestamp registrado para esta pasta
+  recorded_timestamp=""
   if grep -q "${folder}:" "${TIMESTAMP_FILE}"; then
-    recorded_seconds=$(grep "${folder}:" "${TIMESTAMP_FILE}" | cut -d' ' -f2-)
+    recorded_timestamp=$(grep "${folder}:" "${TIMESTAMP_FILE}" | cut -d' ' -f2-)
+  fi
+
+  # Converte o timestamp registrado para segundos desde a época, se existir
+  recorded_seconds=0
+  if [ ! -z "${recorded_timestamp}" ]; then
+    recorded_seconds=$(date --date="${recorded_timestamp}" +%s)
   fi
 
   # Compara os timestamps e faz o download se o arquivo do S3 for mais recente, ou se a pasta DAG não existir
-  if [ "$dag_folder_exists" = "false" ] || [ -z "$recorded_seconds" ] || [ "$s3_seconds" -gt "$recorded_seconds" ]; then
+  if [ "$dag_folder_exists" = "false" ] || [ -z "$recorded_timestamp" ] || [ "$s3_seconds" -gt "$recorded_seconds" ]; then
     echo "Arquivo no S3 é mais recente, não há registro do arquivo, ou a pasta DAG foi excluída. Baixando ${zipfile_path} para ${local_zipfile}."
 
     # Download do arquivo zip do S3
@@ -165,7 +178,7 @@ for folder in $folders; do
 
       # Atualiza o arquivo de timestamps
       sed -i "/${folder}:/d" "${TIMESTAMP_FILE}"  # Remove o registro antigo, se existir
-      echo "${folder}: ${s3_seconds}" >> "${TIMESTAMP_FILE}"
+      echo "${folder}: ${s3_timestamp}" >> "${TIMESTAMP_FILE}"
 
       # Remova o arquivo zip do diretório temporário
       rm -f "${local_zipfile}"
