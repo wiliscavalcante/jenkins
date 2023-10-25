@@ -103,8 +103,17 @@
 
 # Função para converter o formato de data
 convert_date_format() {
-    local date_string="$1"
-    date -d"${date_string}" +'%Y-%m-%d %H:%M:%S'
+  local original_date="$1"
+  
+  # Tentativa direta de interpretar a data
+  if date -d "${original_date}" &> /dev/null; then
+    echo "${original_date}"
+    return
+  fi
+
+  # Se a tentativa direta falhar, tentar uma conversão explícita
+  local formatted_date=$(echo "${original_date}" | awk '{printf "%s %s %s %s %s", $3, $2, $4, $5, $6}')
+  echo "${formatted_date}"
 }
 
 # Configurações
