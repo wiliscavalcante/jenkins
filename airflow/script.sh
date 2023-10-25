@@ -126,10 +126,6 @@ function get_timestamp {
     date -d "${iso_date}" '+%s'
 }
 
-# Testando
-timestamp=$(get_timestamp "2023-10-25T03:16:12+00:00")
-echo $timestamp
-
 # Configurações
 BUCKET_NAME="infra-teste-be"
 S3_DAGS_DIRECTORY="s3://${BUCKET_NAME}/"
@@ -176,6 +172,8 @@ for folder in $folders; do
   if [ ! -z "${recorded_timestamp}" ]; then
     recorded_seconds=$(get_timestamp "${recorded_timestamp}")
   fi
+
+  echo "Debug: folder=${folder}, s3_seconds=${s3_seconds}, recorded_seconds=${recorded_seconds}, dag_folder_exists=${dag_folder_exists}"
 
   if [ "$dag_folder_exists" = "false" ] || [ -z "$recorded_timestamp" ] || [ "$s3_seconds" -gt "$recorded_seconds" ]; then
     echo "Arquivo no S3 é mais recente, não há registro do arquivo, ou a pasta DAG foi excluída. Baixando ${zipfile_path} para ${local_zipfile}."
