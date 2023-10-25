@@ -160,6 +160,7 @@ for folder in $folders; do
     recorded_seconds=$(get_timestamp "${recorded_timestamp}")
   fi
 
+  # Debug:
   echo "Debug: folder=${folder}, s3_seconds=${s3_seconds}, recorded_seconds=${recorded_seconds}, dag_folder_exists=${dag_folder_exists}"
 
   if [ "$dag_folder_exists" = "false" ] || [ -z "$recorded_timestamp" ] || [ "$s3_seconds" -gt "$recorded_seconds" ]; then
