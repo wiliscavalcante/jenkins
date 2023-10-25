@@ -1,20 +1,3 @@
-#!/bin/bash
-export LC_TIME=en_US.UTF-8
-
-function get_timestamp {
-    local iso_date="$1"
-    
-    # Reformatar a data
-    formatted_date="${iso_date:0:10} ${iso_date:11:8}"
-    
-    date -d "${formatted_date}" '+%s'
-}
-
-# Testando
-timestamp=$(get_timestamp "2023-10-25T03:16:12+00:00")
-echo $timestamp
-
-
 # #!/bin/bash
 
 # # Configurações
@@ -123,7 +106,11 @@ export LC_TIME=en_US.UTF-8
 # Função para converter o formato da data retornada pelo S3 para um formato mais padrão
 function get_timestamp {
     local iso_date="$1"
-    date -d "${iso_date}" '+%s'
+    
+    # Reformatar a data
+    formatted_date="${iso_date:0:10} ${iso_date:11:8}"
+    
+    date -d "${formatted_date}" '+%s'
 }
 
 # Configurações
