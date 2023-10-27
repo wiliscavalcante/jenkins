@@ -32,3 +32,18 @@ RUN apk --no-cache add python3 py3-pip && \
 
 # Comando a ser executado quando o contêiner iniciar
 CMD ["/app/sync-dags.sh"]
+############
+# Usar uma imagem base de Python. Você pode especificar uma versão, como python:3.9-alpine, se necessário.
+FROM python:3.9-alpine
+
+# Definir o diretório de trabalho
+WORKDIR /app
+
+# Copiar o script e possíveis arquivos de dependência para o contêiner
+COPY sync_script.py /app/
+
+# Instalar as bibliotecas necessárias
+RUN pip install boto3 tqdm
+
+# Comando a ser executado quando o contêiner iniciar
+CMD ["python", "/app/sync_script.py"]
