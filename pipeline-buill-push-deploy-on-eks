@@ -1,127 +1,17 @@
-stage('Deploy') {
-    steps {
-        script {
-            // Adiciona o repositório do chart
-            env.CHART_REPO_NAME = "my-chart-repo"
-            sh "helm repo add ${env.CHART_REPO_NAME} ${CHART_REPO_URL}"
-            sh "helm repo update"
-            
-            // Define o timeout para a etapa de deploy
-            timeout(time: 20, unit: 'MINUTES') {
-                // Instala ou atualiza o release do Helm com o arquivo values.yaml
-                sh "helm upgrade --install ${HELM_RELEASE_NAME} ${CHART_NAME} --version ${CHART_VERSION} --namespace ${NAMESPACE} --values ${VALUES_FILE_PATH}"
-                
-                // Verifica o estado dos pods do release
-                def pods = sh(returnStdout: true, script: "kubectl get pods --namespace ${NAMESPACE} -l release=${HELM_RELEASE_NAME} -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase}\\n{end}'").trim()
-                def podStatuses = pods.split("\n")
-                
-                // Verifica se todos os pods estão em execução
-                boolean allPodsRunning = podStatuses.every { it.contains("Running") }
-                
-                // Verifica se todos os pods estão em execução e falha o pipeline se não estiverem
-                if (!allPodsRunning) {
-                    error("Falha: Nem todos os pods do release estão em execução após o deploy")
-                }
-            }
-        }
-    }
-}
-
-
----
-pipeline {
-    agent any
-
-    environment {
-        CLUSTER_NAME = "meu-cluster"
-        NAMESPACE = "default"
-        TIMEOUT = 300
-    }
-
-    stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-
-        stage('Build') {
-            steps {
-                sh 'docker build -t my-image:${env.BRANCH_NAME}-${env.BUILD_NUMBER} .'
-            }
-        }
-
-        stage('Push to registry') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'my-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
-                    sh 'docker login -u ${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD} my-registry.com'
-                    sh 'docker push my-registry.com/my-image:${env.BRANCH_NAME}-${env.BUILD_NUMBER}'
-                }
-            }
-        }
-
-        stage('Deploy') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'uat'
-                    branch 'dev'
-                }
-            }
-
-            steps {
-                script {
-                    def ambiente
-                    def cluster
-
-                    switch(env.BRANCH_NAME) {
-                        case 'main':
-                            ambiente = 'prod'
-                            cluster = 'meu-cluster-prod'
-                            break
-                        case 'uat':
-                            ambiente = 'uat'
-                            cluster = 'meu-cluster-uat'
-                            break
-                        case 'dev':
-                            ambiente = 'dev'
-                            cluster = 'meu-cluster-dev'
-                            break
-                    }
-
-                    sh "AWS_REGION=sa-east-1 AWS_PROFILE=ambiente-${ambiente} aws eks update-kubeconfig --name ${cluster}"
-                    sh "kubectl apply -f k8s/api -f k8s/worker -f k8s/redis"
-
-                    sh "kubectl set image deployment/api-deployment api=my-registry.com/my-image:${env.BRANCH_NAME}-${env.BUILD_NUMBER} -n ${NAMESPACE}"
-                    sh "kubectl set image deployment/worker-deployment worker=my-registry.com/my-image:${env.BRANCH_NAME}-${env.BUILD_NUMBER} -n ${NAMESPACE}"
-
-                    timeout(time: env.TIMEOUT, unit: 'SECONDS') {
-                        def success = false
-                        while (!success) {
-                            def pods = sh(script: "kubectl get pods -n ${NAMESPACE} -o jsonpath='{.items[*].status.containerStatuses[?(@.ready==true)].ready}'",
-                                            returnStdout: true).trim()
-                            if (pods == 'true true') {
-                                success = true
-                            } else {
-                                sleep 10
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-#############
 pipeline {
     agent any
     environment {
         DOCKER_REGISTRY = "registry.datalabserasaexperian.com.br"
-        DOCKER_IMAGE = "remote_sensing/agrilearn-api"
+        DOCKER_IMAGE = "agribusiness/agrowatch-core/pb-aws-api"
         DOCKER_TAG = "${BRANCH_NAME}-${BUILD_NUMBER}"
-        NAMESPACE = "agrilearn"
-        DEPLOYMENT_API = "agrilearn-api-deployment"
-        DEPLOYMENT_WORKER = "agrilearn-worker-deployment"
+        NAMESPACE = "agrowatch-core"
+        HELM_RELEASE_NAME = "pb-aws-api"
+        TERRAFORM_PATH = "eks/terraform"
+        KUBECONFIG_PATH = "/var/lib/jenkins/.kube/config-agro"
+
+    }
+    tools {
+        terraform '1.2.7'
     }
     stages {
         stage('Build Image') {
@@ -135,9 +25,8 @@ pipeline {
             steps {
                 script {
                     def branchTag = "${BRANCH_NAME}-${BUILD_NUMBER}"
-                    def latestTag = "${BRANCH_NAME}-latest"
 
-                    sh "docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${branchTag} -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${latestTag} ."
+                    sh "docker build --no-cache -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${branchTag} ."
                 }
             }
         }
@@ -153,7 +42,6 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: 'DOCKER_REPOSITORY', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
                     sh "echo $PASSWORD | docker login ${DOCKER_REGISTRY} -u ${USERNAME} --password-stdin"
                     sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-${BUILD_NUMBER}"
-                    sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${BRANCH_NAME}-latest"
                 }
             }
         }
@@ -183,71 +71,50 @@ pipeline {
                         clusterName = "agribusiness-eks-${env}"
                         profile = "eec-agribusiness-${env}"
                     }
-                  sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName}"	
-                  sh "kubectl delete pods --field-selector status.phase=Failed -n ${NAMESPACE}"
-                  sh "kubectl apply -f kubernetes/${env}/agrilearn-api -f kubernetes/${env}/agrilearn-redis -f kubernetes/${env}/agrilearn-worker"
-                  sh "kubectl scale --replicas=0 deployment/${DEPLOYMENT_API} -n ${NAMESPACE}"
-                  sh "kubectl scale --replicas=0 deployment/${DEPLOYMENT_WORKER} -n ${NAMESPACE}"
-                  sh "sleep 60"
-                  sh "kubectl set image deployment/${DEPLOYMENT_API} agrilearn-api=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} -n ${NAMESPACE}"
-                  sh "kubectl set image deployment/${DEPLOYMENT_WORKER} agrilearn-worker=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} -n ${NAMESPACE}"
-                  sh "kubectl scale --replicas=1 deployment/${DEPLOYMENT_API} -n ${NAMESPACE}"
-                  sh "kubectl scale --replicas=1 deployment/${DEPLOYMENT_WORKER} -n ${NAMESPACE}"
-                  sh "sleep 120"
+                  // Atualiza o valor da tag no arquivo values
+                  sh "sed -i 's|tag: latest|tag: ${DOCKER_TAG}|' eks/helm/${env}/values.yaml"
+                  sh "AWS_REGION=sa-east-1 AWS_PROFILE=${profile} aws eks update-kubeconfig --name ${clusterName} --kubeconfig ${KUBECONFIG_PATH}"	
+                  sh(script: "cd ${TERRAFORM_PATH} && AWS_REGION=sa-east-1 AWS_PROFILE=${profile} terraform init -upgrade -backend-config=backend-config/${env}.tf", returnStdout: true).trim()
+                  sh(script: "cd ${TERRAFORM_PATH} && AWS_REGION=sa-east-1 AWS_PROFILE=${profile} terraform apply -auto-approve -var-file=variables-${env}.tfvars", returnStdout: true).trim()	
+                }
+            }
+        }
+        stage('Validate Deployment') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'uat'
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def timeout = 300  // tempo de espera em segundos
+                    def sleepTime = 20 // intervalo entre verificações em segundos
+                    def iterations = timeout / sleepTime
+                    def allPodsRunning = false
+
+                    for (int i = 0; i < iterations; i++) {
+                        def getPods = sh(script: "kubectl get pods -n ${NAMESPACE} --selector=app=${HELM_RELEASE_NAME} -o jsonpath='{.items[*].status.phase}' --kubeconfig ${KUBECONFIG_PATH}", returnStdout: true).trim()
+                        
+                        def podStatuses = getPods.split(' ')
+                        
+                        if (podStatuses.every { it == 'Running' }) {
+                            allPodsRunning = true
+                            echo "All pods are running."
+                            break
+                        } else {
+                            echo "Waiting for all pods to be running. Current statuses: ${getPods}"
+                        }
+
+                        sleep time: sleepTime, unit: 'SECONDS'
+                    }
+
+                    if (!allPodsRunning) {
+                        error("Validation failed. Not all pods are in 'Running' state.")
+                    }
                 }
             }
         }
     }
 }
-FROM node:16-alpine
-
-WORKDIR /app
-
-COPY . .
-
-RUN yarn config set network-timeout 300000
-RUN for i in {1..3}; do yarn install && break || sleep 1; done
-
-COPY . .
-
-CMD ["node", "index.js"]
------
-
-# Estágio de construção
-FROM node:16-alpine AS builder
-
-# Definir um usuário não-root chamado "appuser"
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-
-WORKDIR /app
-
-# Copiar todos os arquivos para o diretório de trabalho
-COPY . .
-
-# Definir o usuário "appuser" como proprietário dos arquivos
-RUN chown -R appuser:appgroup /app
-
-# Trocar para o usuário "appuser"
-USER appuser
-
-# Configurar o timeout de rede para o Yarn
-RUN yarn config set network-timeout 300000
-
-# Executar a instalação das dependências
-RUN for i in {1..3}; do yarn install && break || sleep 1; done
-
-# Estágio de produção
-FROM node:16-alpine
-
-# Definir um usuário não-root chamado "appuser"
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-
-WORKDIR /app
-
-# Copiar os arquivos necessários do estágio de construção
-COPY --from=builder /app ./
-
-# Trocar para o usuário "appuser"
-USER appuser
-
-CMD ["node", "index.js"]
