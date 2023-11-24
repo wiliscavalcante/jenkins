@@ -118,3 +118,6 @@ pipeline {
         }
     }
 }
+####
+sh(script: "cd kubernetes/terraform ; AWS_REGION=sa-east-1 AWS_PROFILE=${params.AWS_PROFILE} terraform init -backend-config=backend-config/${params.ENVIRONMENT}.tfvars", returnStdout: true).trim()
+           sh(script: "cd kubernetes/terraform ; AWS_REGION=sa-east-1 AWS_PROFILE=${params.AWS_PROFILE} terraform apply -auto-approve -var-file=variables-${params.ENVIRONMENT}.tfvars -var \"app_version=\"${VERSION}", returnStdout: true).trim()
