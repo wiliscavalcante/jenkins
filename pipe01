@@ -24,7 +24,7 @@ pipeline {
                     } else {
                         account = env.BRANCH_NAME
                     }
-                    // // Temporary if clause for we did not prepare uat e and prod yet
+                    // Temporary if clause for we did not prepare uat e and prod yet
                     if(account == "dev" || account == "uat" || account == "prod" ){
                        
                         sh(script: "cd terraform ; AWS_REGION=sa-east-1 AWS_PROFILE=eec-agribusiness-${account} terraform init -reconfigure -upgrade -backend-config=backend-config/${account}.tfvars", returnStdout: true).trim()
@@ -32,6 +32,13 @@ pipeline {
                     }
                 }
             }
+        }
+    }
+
+    post {
+        always {
+            // Limpa o workspace após a conclusão do pipeline
+            cleanWs()
         }
     }
 }
