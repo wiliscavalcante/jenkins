@@ -1,0 +1,37 @@
+pipeline {
+    tools {
+        terraform '1.2.7'
+    }
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '3'))
+    }
+
+    agent any
+
+    stages {
+        stage('Terraform apply Agribusiness - CloudAutomation') {
+            agent {
+                docker {
+                    image 'registry.empresa.com.br:443/python-poetry:poetry-13'
+                    args '-u 0'
+                }
+            }
+
+            steps {
+                script {
+                    if(env.BRANCH_NAME == "main"){
+                        account = "prod"
+                    } else {
+                        account = env.BRANCH_NAME
+                    }
+                    // // Temporary if clause for we did not prepare uat e and prod yet
+                    if(account == "dev" || account == "uat" || account == "prod" ){
+                       
+                        sh(script: "cd terraform ; AWS_REGION=sa-east-1 AWS_PROFILE=eec-agribusiness-${account} terraform init -reconfigure -upgrade -backend-config=backend-config/${account}.tfvars", returnStdout: true).trim()
+                        sh(script: "cd terraform ; AWS_REGION=sa-east-1 AWS_PROFILE=eec-agribusiness-${account} terraform apply -auto-approve -var-file=variables-${account}.tfvars", returnStdout: true).trim()
+                    }
+                }
+            }
+        }
+    }
+}
